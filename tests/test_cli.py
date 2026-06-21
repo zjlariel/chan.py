@@ -4,7 +4,7 @@ from Common.CEnum import DATA_SRC, KL_TYPE
 
 
 def test_default_arguments_include_levels_and_start_dates():
-    from CLI import parse_args
+    from cli_args import parse_args
 
     options = parse_args([], today=date(2026, 6, 21))
 
@@ -20,7 +20,7 @@ def test_default_arguments_include_levels_and_start_dates():
 
 
 def test_explicit_arguments_override_defaults():
-    from CLI import parse_args
+    from cli_args import parse_args
 
     options = parse_args(
         [
@@ -42,7 +42,7 @@ def test_explicit_arguments_override_defaults():
 
 
 def test_sina_data_source_is_supported():
-    from CLI import parse_args
+    from cli_args import parse_args
 
     options = parse_args(["--data-src", "sina"])
 

@@ -1,6 +1,6 @@
 from Chan import CChan
 from ChanConfig import CChanConfig
-from CLI import parse_args
+from cli_args import parse_args
 from Common.CEnum import AUTYPE
 from Plot.AnimatePlotDriver import CAnimateDriver
 from Plot.PlotDriver import CPlotDriver
