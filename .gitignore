@@ -9,3 +9,4 @@ OpenConfig.yaml
 gotify_push.py
 .worktrees/
 cos_config.yaml
+*.png
