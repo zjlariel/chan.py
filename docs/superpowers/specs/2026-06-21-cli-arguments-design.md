@@ -1,14 +1,18 @@
-# CLI Arguments Design
+# 命令行参数设计
 
-## Goal
+## 文档与说明规则
 
-Replace the hard-coded example inputs in `main.py` with a small command-line interface that selects a data source, stock code, date range, K-line levels, and image output directory.
+本功能新增或修改的文档、规格说明、实施计划、代码注释、命令行帮助文本及面向用户的错误提示均使用中文。命令、参数名、文件路径和代码标识符保持其原始英文形式。
 
-## Chosen approach
+## 目标
 
-Use a dedicated, testable parsing module and keep `main.py` as a thin orchestration entry point. This avoids coupling argument validation and date-default logic to plotting and data fetching.
+将 `main.py` 中写死的示例输入替换为简洁的命令行接口，用于选择数据源、股票代码、时间范围、K 线级别和图片输出目录。
 
-## Command-line interface
+## 已选方案
+
+采用独立且可测试的参数解析模块，`main.py` 仅负责调用该模块、组织现有的缠论计算和绘图流程。这样可避免参数校验与日期默认值逻辑耦合到数据获取和绘图代码中。
+
+## 命令行接口
 
 ```text
 python main.py \
@@ -20,43 +24,43 @@ python main.py \
   --output-dir output
 ```
 
-Arguments:
+参数如下：
 
-- `--data-src`: `baostock`, `akshare`, `ccxt`, or `csv`; defaults to `baostock`.
-- `--code`: stock or instrument code; defaults to the existing example, `sz.000001`.
-- `--start`: ISO date (`YYYY-MM-DD`). When supplied, it applies to every selected level.
-- `--end`: optional ISO date. When omitted, the data source continues to receive `None`, preserving its existing latest-data behavior.
-- `--kl-type`: a comma-separated list of `KL_TYPE` names. It defaults to `K_WEEK,K_DAY,K_30M,K_5M`.
-- `--output-dir`: image destination directory; defaults to `output`.
+- `--data-src`：`baostock`、`akshare`、`ccxt` 或 `csv`，默认 `baostock`。
+- `--code`：股票或交易标的代码，默认保留现有示例值 `sz.000001`。
+- `--start`：ISO 日期（`YYYY-MM-DD`）。指定后，全部选中级别均使用该起始日期。
+- `--end`：可选 ISO 日期。未指定时继续向数据源传入 `None`，保持当前“获取至最新数据”的语义。
+- `--kl-type`：以逗号分隔的 `KL_TYPE` 名称列表，默认 `K_WEEK,K_DAY,K_30M,K_5M`。
+- `--output-dir`：图片输出目录，默认 `output`。
 
-Unknown values and malformed dates terminate through argparse with a clear error. No trading-calendar normalization, retry policy, or network-timeout behavior is included in this feature.
+未知参数值和格式错误的日期由 argparse 以明确的中文错误信息终止程序。本功能不包含交易日历归一化、重试策略或网络超时处理。
 
-## Level-specific start dates
+## 分级别起始日期
 
-When `--start` is omitted, the CLI computes a start date relative to the current calendar date for each selected level:
+未提供 `--start` 时，CLI 以当前自然日为基准，为每个选中级别计算起始日期：
 
-| Level | Lookback |
+| 级别 | 回溯天数 |
 | --- | ---: |
-| `K_WEEK` | 2400 days |
-| `K_DAY` | 1200 days |
-| `K_30M` | 180 days |
-| `K_5M` | 20 days |
+| `K_WEEK` | 2400 天 |
+| `K_DAY` | 1200 天 |
+| `K_30M` | 180 天 |
+| `K_5M` | 20 天 |
 
-Other levels receive `None` unless an explicit `--start` is supplied.
+其他级别在未显式提供 `--start` 时传入 `None`。
 
-`CChan` currently distributes one `begin_time` to every data source request. It will be extended to also accept a mapping keyed by `KL_TYPE`, while retaining the scalar input behavior for all current callers. Each data-source instance receives the date for the level it is loading.
+目前 `CChan` 会将同一个 `begin_time` 传给所有数据源请求。它将向后兼容地支持以 `KL_TYPE` 为键的日期映射；加载每个级别时，数据源实例接收该级别对应的起始日期。
 
-## Output
+## 输出
 
-The entry point creates the requested directory if necessary and saves the static image as `<output-dir>/<code>.png`. The repository ignores `/output/` so default generated images do not appear in Git status.
+入口程序在必要时创建输出目录，并将静态图片保存为 `<output-dir>/<code>.png`。仓库通过忽略 `/output/`，避免默认生成的图片出现在 Git 状态中。
 
-## Structure and tests
+## 结构与测试
 
-- A small CLI module owns the parser, enum mapping, ISO date validation, and level-specific start-date calculation.
-- `main.py` owns the existing Chan/plot configuration and calls that module.
-- `Chan.py` selects a per-level beginning date when supplied a mapping.
-- Focused tests cover parser defaults, multi-level parsing, explicit-start override, invalid input, default lookbacks, and per-level forwarding to a data source.
+- 一个小型 CLI 模块负责解析参数、映射枚举、校验 ISO 日期以及计算分级别起始日期。
+- `main.py` 保留现有的 Chan/绘图配置，并调用该模块。
+- `Chan.py` 在收到日期映射时选择对应级别的起始日期。
+- 使用聚焦的单元测试覆盖：默认参数、多级别解析、显式起始日期覆盖、非法输入、默认回溯时间，以及分级别日期向数据源的传递。
 
-## Compatibility
+## 兼容性
 
-Existing callers that pass scalar `begin_time` and `end_time` retain their current behavior. The default data source remains BaoStock and the existing plotting configuration remains unchanged.
+当前传入标量 `begin_time` 和 `end_time` 的调用方保持原有行为。默认数据源仍为 BaoStock，现有绘图配置不变。
