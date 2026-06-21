@@ -30,6 +30,7 @@ DATA_SOURCE_MAP = {
     "ccxt": DATA_SRC.CCXT,
     "csv": DATA_SRC.CSV,
     "sina": DATA_SRC.SINA,
+    "cache": DATA_SRC.CACHE,
 }
 LIVE_TYPES = [KL_TYPE.K_1M, KL_TYPE.K_5M, KL_TYPE.K_15M, KL_TYPE.K_30M, KL_TYPE.K_60M]
 EOD_TYPES = [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_60M, KL_TYPE.K_30M, KL_TYPE.K_15M, KL_TYPE.K_5M]
@@ -111,7 +112,7 @@ def _default_plot_para():
 
 @app.command(name="analyze", help="缠论 K 线分析与绘图")
 def analyze(
-    data_src: Annotated[str, typer.Option("--data-src", help="数据源：baostock、akshare、ccxt、csv、sina")] = "baostock",
+    data_src: Annotated[str, typer.Option("--data-src", help="数据源：cache、baostock、akshare、ccxt、csv、sina")] = "cache",
     code: Annotated[str, typer.Option("--code", help="股票或交易标的代码")] = "sz.000001",
     start: Annotated[Optional[str], typer.Option("--start", help="起始日期，格式 YYYY-MM-DD")] = None,
     end: Annotated[Optional[str], typer.Option("--end", help="结束日期，格式 YYYY-MM-DD")] = None,
@@ -127,31 +128,39 @@ def analyze(
     begin_time = _begin_time(levels, start_date, date.today())
 
     config = _default_chan_config()
-    chan = CChan(
-        code=code,
-        begin_time=begin_time,
-        end_time=end_date,
-        data_src=DATA_SOURCE_MAP[data_src],
-        lv_list=levels,
-        config=config,
-        autype=AUTYPE.QFQ,
-    )
+    if data_src == "cache":
+        for level in levels:
+            cache = CCache(code, level, begin_time[level], end_date, AUTYPE.QFQ, mode="eod")
+            list(cache.get_kl_data())
+    analysis_level_sets = [[level] for level in levels] if data_src == "cache" else [levels]
+    for analysis_levels in analysis_level_sets:
+        analysis_begin_time = {level: begin_time[level] for level in analysis_levels}
+        chan = CChan(
+            code=code,
+            begin_time=analysis_begin_time,
+            end_time=end_date,
+            data_src=DATA_SOURCE_MAP[data_src],
+            lv_list=analysis_levels,
+            config=config,
+            autype=AUTYPE.QFQ,
+        )
 
-    if not config.trigger_step:
-        plot_driver = CPlotDriver(
-            chan,
-            plot_config=_default_plot_config(),
-            plot_para=_default_plot_para(),
-        )
-        plot_driver.figure.show()
-        output_dir.mkdir(parents=True, exist_ok=True)
-        plot_driver.save2img(str(output_dir / f"{code}.png"))
-    else:
-        CAnimateDriver(
-            chan,
-            plot_config=_default_plot_config(),
-            plot_para=_default_plot_para(),
-        )
+        if not config.trigger_step:
+            plot_driver = CPlotDriver(
+                chan,
+                plot_config=_default_plot_config(),
+                plot_para=_default_plot_para(),
+            )
+            plot_driver.figure.show()
+            output_dir.mkdir(parents=True, exist_ok=True)
+            suffix = f"_{analysis_levels[0].name}" if data_src == "cache" else ""
+            plot_driver.save2img(str(output_dir / f"{code}{suffix}.png"))
+        else:
+            CAnimateDriver(
+                chan,
+                plot_config=_default_plot_config(),
+                plot_para=_default_plot_para(),
+            )
 
 
 cache_app = typer.Typer(help="离线缓存管理")

@@ -1,12 +1,15 @@
 from Chan import CChan
 from ChanConfig import CChanConfig
-from cli_args import parse_args
-from Common.CEnum import AUTYPE
+from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
 from Plot.AnimatePlotDriver import CAnimateDriver
 from Plot.PlotDriver import CPlotDriver
 
 if __name__ == "__main__":
-    options = parse_args()
+    code = "sz.000001"
+    begin_time = "2018-01-01"
+    end_time = None
+    data_src = DATA_SRC.BAO_STOCK
+    lv_list = [KL_TYPE.K_DAY]
 
     config = CChanConfig({
         "bi_strict": True,
@@ -60,11 +63,11 @@ if __name__ == "__main__":
         }
     }
     chan = CChan(
-        code=options.code,
-        begin_time=options.begin_time,
-        end_time=options.end_time,
-        data_src=options.data_src,
-        lv_list=options.lv_list,
+        code=code,
+        begin_time=begin_time,
+        end_time=end_time,
+        data_src=data_src,
+        lv_list=lv_list,
         config=config,
         autype=AUTYPE.QFQ,
     )
@@ -76,8 +79,7 @@ if __name__ == "__main__":
             plot_para=plot_para,
         )
         plot_driver.figure.show()
-        options.output_dir.mkdir(parents=True, exist_ok=True)
-        plot_driver.save2img(str(options.output_path))
+        plot_driver.save2img("./test.png")
     else:
         CAnimateDriver(
             chan,

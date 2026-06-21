@@ -1,27 +1,54 @@
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from Common.CEnum import KL_TYPE
+from Common.CEnum import DATA_SRC, KL_TYPE
 from cli import app
 
 runner = CliRunner()
 
 
-def test_analyze_defaults_use_baostock_and_default_levels():
-    with patch("cli.CChan") as mock_chan, patch("cli.CPlotDriver") as mock_plot:
+def test_analyze_defaults_fill_missing_cache_with_baostock_and_use_default_levels():
+    with patch("cli.CChan") as mock_chan, patch("cli.CCache") as mock_cache, patch("cli.CPlotDriver") as mock_plot:
         mock_chan.return_value = MagicMock()
+        mock_cache.return_value.get_kl_data.return_value = iter(())
         mock_plot.return_value = MagicMock()
         mock_plot.return_value.figure.show = MagicMock()
         result = runner.invoke(app, ["analyze"])
 
     assert result.exit_code == 0, result.output
-    args = mock_chan.call_args.kwargs
-    assert args["code"] == "sz.000001"
-    assert args["data_src"].name == "BAO_STOCK"
-    assert args["lv_list"] == [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
+    today = date.today()
+    expected_begin_dates = {
+        KL_TYPE.K_WEEK: (today - timedelta(days=2400)).isoformat(),
+        KL_TYPE.K_DAY: (today - timedelta(days=1200)).isoformat(),
+        KL_TYPE.K_30M: (today - timedelta(days=180)).isoformat(),
+        KL_TYPE.K_5M: (today - timedelta(days=20)).isoformat(),
+    }
+    assert mock_chan.call_count == 4
+    for call, level in zip(mock_chan.call_args_list, expected_begin_dates):
+        args = call.kwargs
+        assert args["code"] == "sz.000001"
+        assert args["data_src"] == DATA_SRC.CACHE
+        assert args["lv_list"] == [level]
+        assert args["begin_time"] == {level: expected_begin_dates[level]}
+
+    assert mock_cache.call_count == 4
+    assert all(call.kwargs["mode"] == "eod" for call in mock_cache.call_args_list)
+    assert [call.args[1] for call in mock_cache.call_args_list] == [
+        KL_TYPE.K_WEEK,
+        KL_TYPE.K_DAY,
+        KL_TYPE.K_30M,
+        KL_TYPE.K_5M,
+    ]
+    assert mock_plot.call_count == 4
+    assert [Path(call.args[0]).name for call in mock_plot.return_value.save2img.call_args_list] == [
+        "sz.000001_K_WEEK.png",
+        "sz.000001_K_DAY.png",
+        "sz.000001_K_30M.png",
+        "sz.000001_K_5M.png",
+    ]
 
 
 def test_analyze_accepts_sina_and_custom_levels():

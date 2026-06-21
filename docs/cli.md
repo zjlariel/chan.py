@@ -25,6 +25,12 @@ python cli.py --help
 chanpy --help
 ```
 
+> 入口命令在 `pyproject.toml` 中注册：
+> ```toml
+> [project.scripts]
+> chanpy = "cli:app"
+> ```
+
 ### 顶层命令
 
 ```text
@@ -48,7 +54,7 @@ python cli.py [OPTIONS] COMMAND [ARGS]...
 
 ### 功能
 
-读取指定股票、数据源、K 线级别与时间范围，运行缠论计算流程，并将结果保存为 PNG 图片。
+默认先查询本地 SQLite 缓存；未命中的周线、日线、30 分钟和 5 分钟数据会按各自默认回溯窗口由 Baostock 补齐并写入缓存，随后运行缠论计算并保存 PNG 图片。显式指定其他数据源时，保留直接读取该数据源的行为。
 
 ### 命令
 
@@ -60,7 +66,7 @@ python cli.py analyze [OPTIONS]
 
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
-| `--data-src` | 数据源：`baostock`、`akshare`、`ccxt`、`csv`、`sina` | `baostock` |
+| `--data-src` | 数据源：`cache`、`baostock`、`akshare`、`ccxt`、`csv`、`sina` | `cache` |
 | `--code` | 股票或交易标的代码 | `sz.000001` |
 | `--start` | 起始日期，格式 `YYYY-MM-DD` | 按级别自动回溯 |
 | `--end` | 结束日期，格式 `YYYY-MM-DD` | 获取至最新数据 |
@@ -82,7 +88,6 @@ python cli.py analyze [OPTIONS]
 
 ```bash
 python cli.py analyze \
-  --data-src baostock \
   --code sh.600000 \
   --start 2024-01-01 \
   --end 2025-12-31 \
@@ -90,7 +95,12 @@ python cli.py analyze \
   --output-dir output
 ```
 
-运行后将生成 `output/sh.600000.png`。
+缓存模式会按级别分别执行分析，生成：
+
+- `output/sh.600000_K_WEEK.png`
+- `output/sh.600000_K_DAY.png`
+- `output/sh.600000_K_30M.png`
+- `output/sh.600000_K_5M.png`
 
 ---
 
