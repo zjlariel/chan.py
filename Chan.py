@@ -187,6 +187,9 @@ class CChan:
         elif self.data_src == DATA_SRC.SINA:
             from DataAPI.SinaAPI import CSina
             _dict[DATA_SRC.SINA] = CSina
+        elif self.data_src == DATA_SRC.CACHE:
+            from DataAPI.CacheAPI import CCache
+            _dict[DATA_SRC.CACHE] = CCache
         if self.data_src in _dict:
             return _dict[self.data_src]
         assert isinstance(self.data_src, str)

@@ -8,6 +8,7 @@ class DATA_SRC(Enum):
     CSV = auto()
     AKSHARE = auto()
     SINA = auto()
+    CACHE = auto()
 
 
 class KL_TYPE(Enum):

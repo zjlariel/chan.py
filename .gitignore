@@ -11,3 +11,4 @@ gotify_push.py
 cos_config.yaml
 *.png
 /output/
+.chanpy/
