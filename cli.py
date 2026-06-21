@@ -151,7 +151,6 @@ def analyze(
                 plot_config=_default_plot_config(),
                 plot_para=_default_plot_para(),
             )
-            plot_driver.figure.show()
             output_dir.mkdir(parents=True, exist_ok=True)
             suffix = f"_{analysis_levels[0].name}" if data_src == "cache" else ""
             plot_driver.save2img(str(output_dir / f"{code}{suffix}.png"))

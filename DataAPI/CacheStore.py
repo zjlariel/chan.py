@@ -1,6 +1,7 @@
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from Common.CEnum import DATA_FIELD
 from Common.CTime import CTime
@@ -25,7 +26,7 @@ class CacheStore:
                     volume REAL,
                     turnover REAL,
                     source TEXT NOT NULL,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL,
                     PRIMARY KEY (symbol, k_type, timestamp)
                 );
                 CREATE TABLE IF NOT EXISTS coverage (
@@ -34,7 +35,7 @@ class CacheStore:
                     start_date TEXT NOT NULL,
                     end_date TEXT NOT NULL,
                     source TEXT NOT NULL,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL,
                     PRIMARY KEY (symbol, k_type, start_date, end_date, source)
                 );
                 """
@@ -59,11 +60,13 @@ class CacheStore:
             )
         if not rows:
             return
+        updated_at = self._now()
+        rows = [row + (updated_at,) for row in rows]
         with self._connect() as connection:
             connection.executemany(
                 """
-                INSERT INTO bars (symbol, k_type, timestamp, open, high, low, close, volume, turnover, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO bars (symbol, k_type, timestamp, open, high, low, close, volume, turnover, source, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol, k_type, timestamp) DO UPDATE SET
                     open = excluded.open,
                     high = excluded.high,
@@ -72,7 +75,7 @@ class CacheStore:
                     volume = excluded.volume,
                     turnover = excluded.turnover,
                     source = excluded.source,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = excluded.updated_at
                 """,
                 rows,
             )
@@ -92,15 +95,16 @@ class CacheStore:
         return [self._row_to_bar(row) for row in rows]
 
     def mark_covered(self, symbol, k_type, start_date, end_date, source):
+        updated_at = self._now()
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO coverage (symbol, k_type, start_date, end_date, source)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO coverage (symbol, k_type, start_date, end_date, source, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol, k_type, start_date, end_date, source) DO UPDATE SET
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = excluded.updated_at
                 """,
-                (symbol, k_type.name, start_date[:10], end_date[:10], source),
+                (symbol, k_type.name, start_date[:10], end_date[:10], source, updated_at),
             )
 
     def covers(self, symbol, k_type, begin_date, end_date):
@@ -135,6 +139,10 @@ class CacheStore:
     @staticmethod
     def _timestamp_key(time):
         return f"{time.year:04}-{time.month:02}-{time.day:02} {time.hour:02}:{time.minute:02}"
+
+    @staticmethod
+    def _now():
+        return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
 
     @staticmethod
     def _range_start(value):
