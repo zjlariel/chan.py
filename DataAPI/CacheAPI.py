@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from Common.CEnum import KL_TYPE
+from Common.CEnum import AUTYPE, KL_TYPE
 from DataAPI.SinaAPI import CSina
 
 from .CacheStore import CacheStore
@@ -15,7 +15,7 @@ class CCache(CCommonStockApi):
         KL_TYPE.K_WEEK: 2400,
         KL_TYPE.K_DAY: 1200,
         KL_TYPE.K_60M: 360,
-        KL_TYPE.K_30M: 180,
+        KL_TYPE.K_30M: 300,
         KL_TYPE.K_15M: 90,
         KL_TYPE.K_5M: 20,
         KL_TYPE.K_1M: 5,
@@ -28,7 +28,7 @@ class CCache(CCommonStockApi):
         k_type,
         begin_date=None,
         end_date=None,
-        autype=None,
+        autype=AUTYPE.QFQ,
         cache_path=None,
         now=None,
         provider_classes=None,

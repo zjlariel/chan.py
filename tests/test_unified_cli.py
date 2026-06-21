@@ -23,7 +23,7 @@ def test_analyze_defaults_fill_missing_cache_with_baostock_and_use_default_level
     expected_begin_dates = {
         KL_TYPE.K_WEEK: (today - timedelta(days=2400)).isoformat(),
         KL_TYPE.K_DAY: (today - timedelta(days=1200)).isoformat(),
-        KL_TYPE.K_30M: (today - timedelta(days=180)).isoformat(),
+        KL_TYPE.K_30M: (today - timedelta(days=300)).isoformat(),
         KL_TYPE.K_5M: (today - timedelta(days=20)).isoformat(),
     }
     assert mock_chan.call_count == 4
@@ -122,11 +122,28 @@ def test_cache_update_eod_refreshes_eod_types(tmp_path):
     assert all(k_type != "K_1M" for _, k_type, _, _ in calls)
 
 
-def test_cache_update_requires_mode_and_codes():
-    result = runner.invoke(app, ["cache", "update", "--codes", "600000"])
-    assert result.exit_code != 0
-    assert "--mode" in result.output
+def test_cache_update_defaults_to_auto_mode(tmp_path):
+    calls = []
 
+    class FakeCache:
+        def __init__(self, code, k_type, begin_date=None, end_date=None, autype=None, cache_path=None, now=None, provider_classes=None, mode="auto"):
+            self.code = code
+            self.k_type = k_type
+            self.mode = mode
+            self.cache_path = cache_path
+
+        def refresh(self):
+            calls.append((self.code, self.k_type.name, self.mode))
+
+    with patch("cli.CCache", FakeCache):
+        result = runner.invoke(app, ["cache", "update", "--codes", "600000", "--cache-path", str(tmp_path / "cache.sqlite3")])
+
+    assert result.exit_code == 0, result.output
+    assert [item[1] for item in calls] == ["K_WEEK", "K_DAY", "K_60M", "K_30M", "K_15M", "K_5M", "K_1M"]
+    assert all(item[2] == "auto" for item in calls)
+
+
+def test_cache_update_requires_codes():
     result = runner.invoke(app, ["cache", "update", "--mode", "live"])
     assert result.exit_code != 0
     assert "--codes" in result.output

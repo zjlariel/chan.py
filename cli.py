@@ -21,7 +21,7 @@ DEFAULT_LEVELS = [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
 DEFAULT_LOOKBACK_DAYS = {
     KL_TYPE.K_WEEK: 2400,
     KL_TYPE.K_DAY: 1200,
-    KL_TYPE.K_30M: 180,
+    KL_TYPE.K_30M: 300,
     KL_TYPE.K_5M: 20,
 }
 DATA_SOURCE_MAP = {
@@ -34,6 +34,7 @@ DATA_SOURCE_MAP = {
 }
 LIVE_TYPES = [KL_TYPE.K_1M, KL_TYPE.K_5M, KL_TYPE.K_15M, KL_TYPE.K_30M, KL_TYPE.K_60M]
 EOD_TYPES = [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_60M, KL_TYPE.K_30M, KL_TYPE.K_15M, KL_TYPE.K_5M]
+AUTO_TYPES = EOD_TYPES + [KL_TYPE.K_1M]
 
 
 def _parse_levels(value: str) -> list[KL_TYPE]:
@@ -168,14 +169,14 @@ app.add_typer(cache_app, name="cache")
 
 @cache_app.command(name="update", help="刷新缓存数据")
 def cache_update(
-    mode: Annotated[str, typer.Option("--mode", help="刷新模式：live 或 eod")],
     codes: Annotated[str, typer.Option("--codes", help="逗号分隔的股票代码")],
+    mode: Annotated[str, typer.Option("--mode", help="刷新模式：auto、live 或 eod")] = "auto",
     cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
 ):
-    if mode not in {"live", "eod"}:
-        raise typer.BadParameter("mode 必须是 live 或 eod")
+    if mode not in {"auto", "live", "eod"}:
+        raise typer.BadParameter("mode 必须是 auto、live 或 eod")
 
-    types = LIVE_TYPES if mode == "live" else EOD_TYPES
+    types = LIVE_TYPES if mode == "live" else EOD_TYPES if mode == "eod" else AUTO_TYPES
     for code in [c.strip() for c in codes.split(",") if c.strip()]:
         for k_type in types:
             api = CCache(code, k_type, cache_path=cache_path, mode=mode)

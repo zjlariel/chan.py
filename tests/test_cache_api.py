@@ -83,6 +83,24 @@ def test_end_of_day_cache_miss_fetches_baostock(tmp_path):
     assert FakeSina.calls == []
 
 
+def test_end_of_day_cache_uses_qfq_when_autype_is_omitted(tmp_path):
+    FakeSina.calls = []
+    FakeBao.calls = []
+    api = CCache(
+        "002460",
+        KL_TYPE.K_DAY,
+        "2026-06-18",
+        "2026-06-18",
+        cache_path=tmp_path / "cache.sqlite3",
+        now=datetime(2026, 6, 18, 19, 0),
+        provider_classes={"sina": FakeSina, "baostock": FakeBao},
+    )
+
+    list(api.get_kl_data())
+
+    assert FakeBao.calls[0][-1] == AUTYPE.QFQ
+
+
 def test_end_of_day_skips_one_minute_refresh(tmp_path):
     api = build_api(tmp_path, KL_TYPE.K_1M, datetime(2026, 6, 18, 19, 0))
 

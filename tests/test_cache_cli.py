@@ -74,9 +74,8 @@ def test_status_prints_cache_summary(capsys, tmp_path):
     assert "10" in captured.out
 
 
-def test_parse_args_requires_update_mode():
-    with pytest.raises(SystemExit):
-        parse_args(["update", "--codes", "600000"])
+def test_parse_args_defaults_update_mode_to_auto():
+    assert parse_args(["update", "--codes", "600000"]).mode == "auto"
 
 
 def test_parse_args_requires_update_codes():

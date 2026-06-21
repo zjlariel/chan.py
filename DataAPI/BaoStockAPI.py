@@ -58,7 +58,24 @@ class CBaoStock(CCommonStockApi):
     is_connect = None
 
     def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
-        super(CBaoStock, self).__init__(code, k_type, begin_date, end_date, autype)
+        super(CBaoStock, self).__init__(self.normalize_symbol(code), k_type, begin_date, end_date, autype)
+
+    @staticmethod
+    def normalize_symbol(code):
+        symbol = str(code).lower().replace(".", "")
+        if symbol[:2] in {"sh", "sz"}:
+            exchange, digits = symbol[:2], symbol[2:]
+            if len(digits) != 6 or not digits.isdigit():
+                raise ValueError(f"unsupported A-share symbol: {code}")
+            return f"{exchange}.{digits}"
+
+        if len(symbol) != 6 or not symbol.isdigit():
+            raise ValueError(f"unsupported A-share symbol: {code}")
+        if symbol.startswith("6"):
+            return f"sh.{symbol}"
+        if symbol.startswith(("0", "2", "3")):
+            return f"sz.{symbol}"
+        raise ValueError(f"unsupported A-share symbol: {code}")
 
     def get_kl_data(self):
         # 天级别以上才有详细交易信息
