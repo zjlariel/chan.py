@@ -54,10 +54,35 @@ class CCache(CCommonStockApi):
 
     def refresh(self, full=False):
         begin_date, end_date = self._requested_range()
+        if self.mode == "auto":
+            self._refresh_auto(begin_date, end_date, full)
+            return
         provider_name = self._provider_name()
         if provider_name:
             fetch_begin = begin_date if full or not self.store.covers(self.symbol, self.k_type, begin_date, end_date) else self._incremental_begin(begin_date)
             self._refresh(provider_name, fetch_begin, end_date, begin_date)
+
+    def _refresh_auto(self, begin_date, end_date, full):
+        fetch_begin = begin_date if full or not self.store.covers(self.symbol, self.k_type, begin_date, end_date) else self._incremental_begin(begin_date)
+        today = self.now.date().isoformat()
+        yesterday = (self.now.date() - timedelta(days=1)).isoformat()
+        refreshed = False
+
+        if self.k_type in self.MINUTE_TYPES and self.k_type != KL_TYPE.K_1M:
+            history_end = min(end_date, yesterday)
+            if fetch_begin <= history_end:
+                refreshed = self._refresh("baostock", fetch_begin, history_end) or refreshed
+
+        if self.k_type in self.MINUTE_TYPES:
+            today_begin = max(fetch_begin, today)
+            if today_begin <= end_date:
+                refreshed = self._refresh("sina", today_begin, end_date) or refreshed
+        elif fetch_begin <= min(end_date, yesterday):
+            refreshed = self._refresh("baostock", fetch_begin, min(end_date, yesterday)) or refreshed
+
+        if refreshed:
+            self.store.prune_before(self.symbol, self.k_type, begin_date)
+            self.store.replace_coverage(self.symbol, self.k_type, begin_date, end_date, "auto")
 
     def _refresh(self, provider_name, begin_date, end_date, retention_begin=None):
         provider_class = self.provider_classes[provider_name]
@@ -76,6 +101,8 @@ class CCache(CCommonStockApi):
                 )
             else:
                 self.store.mark_covered(self.symbol, self.k_type, begin_date, end_date, provider_name)
+            return True
+        return False
 
     def _incremental_begin(self, retention_begin):
         latest_timestamp = self.store.latest_timestamp(self.symbol, self.k_type)
