@@ -285,7 +285,8 @@ class CPlotDriver:
             show_func_helper(eval(f'self.{func}'))
 
     def save2img(self, path):
-        plt.savefig(path, bbox_inches='tight')
+        self.figure.savefig(path, bbox_inches='tight')
+        plt.close(self.figure)
 
     def draw_klu(self, meta: CChanPlotMeta, ax: Axes, width=0.4, rugd=True, plot_mode="kl"):
         # rugd: red up green down

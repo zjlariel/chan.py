@@ -42,14 +42,20 @@ def test_analyze_defaults_fill_missing_cache_with_baostock_and_use_default_level
         KL_TYPE.K_30M,
         KL_TYPE.K_5M,
     ]
-    assert mock_plot.call_count == 4
-    assert [Path(call.args[0]).name for call in mock_plot.return_value.save2img.call_args_list] == [
-        "sz.000001_K_WEEK.png",
-        "sz.000001_K_DAY.png",
-        "sz.000001_K_30M.png",
-        "sz.000001_K_5M.png",
-    ]
-    assert all(call.kwargs["plot_para"]["figure"]["x_range"] == 0 for call in mock_plot.call_args_list)
+    assert not mock_plot.called
+
+
+def test_analyze_defaults_prints_terminal_summary():
+    with patch("cli.CChan") as mock_chan, patch("cli.CCache") as mock_cache, patch("cli.format_summary") as mock_summary:
+        mock_chan.return_value = MagicMock()
+        mock_cache.return_value.get_kl_data.return_value = iter(())
+        mock_summary.return_value = "分析摘要"
+
+        result = runner.invoke(app, ["analyze"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "分析摘要\n"
+    assert mock_summary.call_count == 1
 
 
 def test_analyze_accepts_sina_and_custom_levels():
@@ -64,6 +70,34 @@ def test_analyze_accepts_sina_and_custom_levels():
     assert args["code"] == "sh.600000"
     assert args["data_src"].name == "SINA"
     assert args["lv_list"] == [KL_TYPE.K_1M, KL_TYPE.K_5M]
+
+
+def test_analyze_json_writes_results_without_generating_figures(tmp_path):
+    with patch("cli.CChan") as mock_chan, patch("cli.CCache") as mock_cache, patch("cli.CPlotDriver") as mock_plot, patch("cli.build_document") as mock_document:
+        mock_chan.return_value = MagicMock()
+        mock_cache.return_value.get_kl_data.return_value = iter(())
+        mock_document.return_value = {"code": "sz.000001", "levels": {}}
+
+        result = runner.invoke(
+            app,
+            ["analyze", "--json", "--output-dir", str(tmp_path)],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert not mock_plot.called
+    assert (tmp_path / "sz.000001_analysis.json").read_text(encoding="utf-8") == '{\n  "code": "sz.000001",\n  "levels": {}\n}'
+
+
+def test_analyze_figure_option_generates_images():
+    with patch("cli.CChan") as mock_chan, patch("cli.CCache") as mock_cache, patch("cli.CPlotDriver") as mock_plot:
+        mock_chan.return_value = MagicMock()
+        mock_cache.return_value.get_kl_data.return_value = iter(())
+        mock_plot.return_value = MagicMock()
+
+        result = runner.invoke(app, ["analyze", "--figure"])
+
+    assert result.exit_code == 0, result.output
+    assert mock_plot.call_count == 4
 
 
 def test_analyze_rejects_unknown_data_source():

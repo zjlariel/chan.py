@@ -27,6 +27,8 @@ chanpy analyze [OPTIONS]
 | `--end` | 结束日期，格式 `YYYY-MM-DD` | 获取至最新数据 |
 | `--kl-type` | 逗号分隔的 K 线级别 | `K_WEEK,K_DAY,K_30M,K_5M` |
 | `--output-dir` | 图片输出目录 | `output` |
+| `--json` | 导出笔、线段、中枢与买卖点等计算结果 | 关闭 |
+| `--figure` | 生成 PNG 图片输出 | 关闭 |
 
 未提供 `--start` 时，默认回溯天数如下：
 
@@ -41,9 +43,13 @@ chanpy analyze [OPTIONS]
 
 ```bash
 chanpy analyze --code sz.002536
+chanpy analyze --code sz.002536 --json
+chanpy analyze --code sz.002536 --json --figure
 chanpy analyze --code sh.600000 --start 2024-01-01 --end 2025-12-31
 chanpy analyze --data-src baostock --code sz.000001 --kl-type K_DAY --output-dir images
 ```
+
+默认执行会在终端打印各级别的简洁摘要，包括数据范围、笔、线段、中枢数量、最后一个中枢区间和最新买卖点。默认不会写入图片或 JSON 文件；分别使用 `--figure`、`--json` 按需生成。
 
 `--data-src cache` 时会按级别分别输出图片，例如：
 
@@ -51,6 +57,8 @@ chanpy analyze --data-src baostock --code sz.000001 --kl-type K_DAY --output-dir
 - `output/sz.002536_K_DAY.png`
 - `output/sz.002536_K_30M.png`
 - `output/sz.002536_K_5M.png`
+
+`--json` 会生成 `output/sz.002536_analysis.json`。它包含每个级别的时间范围、笔、线段、线段线段、中枢和买卖点；K 线 OHLCV 数据不重复导出，可直接从 SQLite 缓存查询。
 
 ---
 

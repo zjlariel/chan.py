@@ -1,5 +1,7 @@
 """Unified command-line entry point for chan.py."""
 
+import json
+
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
@@ -9,6 +11,8 @@ from typing_extensions import Annotated
 
 from Chan import CChan
 from ChanConfig import CChanConfig
+from App.analysis_export import build_document
+from App.analysis_summary import format_summary
 from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
 from DataAPI.CacheAPI import CCache
 from DataAPI.CacheStore import CacheStore
@@ -119,6 +123,8 @@ def analyze(
     end: Annotated[Optional[str], typer.Option("--end", help="结束日期，格式 YYYY-MM-DD")] = None,
     kl_type: Annotated[str, typer.Option("--kl-type", help="逗号分隔的 K 线级别")] = "K_WEEK,K_DAY,K_30M,K_5M",
     output_dir: Annotated[Path, typer.Option("--output-dir", help="图片输出目录")] = Path("output"),
+    json_output: Annotated[bool, typer.Option("--json", help="导出格式化的缠论计算结果 JSON")] = False,
+    figure: Annotated[bool, typer.Option("--figure", help="生成分析图片")] = False,
 ):
     if data_src not in DATA_SOURCE_MAP:
         raise typer.BadParameter(f"未知数据源：{data_src}")
@@ -129,6 +135,7 @@ def analyze(
     begin_time = _begin_time(levels, start_date, date.today())
 
     config = _default_chan_config()
+    analysis_results = {}
     if data_src == "cache":
         for level in levels:
             cache = CCache(code, level, begin_time[level], end_date, AUTYPE.QFQ, mode="eod")
@@ -145,8 +152,10 @@ def analyze(
             config=config,
             autype=AUTYPE.QFQ,
         )
+        for level in analysis_levels:
+            analysis_results[level] = chan[level]
 
-        if not config.trigger_step:
+        if figure and not config.trigger_step:
             plot_driver = CPlotDriver(
                 chan,
                 plot_config=_default_plot_config(),
@@ -155,12 +164,22 @@ def analyze(
             output_dir.mkdir(parents=True, exist_ok=True)
             suffix = f"_{analysis_levels[0].name}" if data_src == "cache" else ""
             plot_driver.save2img(str(output_dir / f"{code}{suffix}.png"))
-        else:
+        elif figure:
             CAnimateDriver(
                 chan,
                 plot_config=_default_plot_config(),
                 plot_para=_default_plot_para(),
             )
+
+    if json_output:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{code}_analysis.json"
+        output_path.write_text(
+            json.dumps(build_document(code, data_src, analysis_results), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    typer.echo(format_summary(code, data_src, analysis_results))
 
 
 cache_app = typer.Typer(help="离线缓存管理")
