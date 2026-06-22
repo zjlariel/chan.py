@@ -107,6 +107,30 @@ class CacheStore:
                 (symbol, k_type.name, start_date[:10], end_date[:10], source, updated_at),
             )
 
+    def replace_coverage(self, symbol, k_type, start_date, end_date, source):
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM coverage WHERE symbol = ? AND k_type = ?",
+                (symbol, k_type.name),
+            )
+        self.mark_covered(symbol, k_type, start_date, end_date, source)
+
+    def latest_timestamp(self, symbol, k_type):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT MAX(timestamp) AS timestamp FROM bars WHERE symbol = ? AND k_type = ?",
+                (symbol, k_type.name),
+            ).fetchone()
+        return row["timestamp"] if row and row["timestamp"] else None
+
+    def prune_before(self, symbol, k_type, start_date):
+        with self._connect() as connection:
+            result = connection.execute(
+                "DELETE FROM bars WHERE symbol = ? AND k_type = ? AND timestamp < ?",
+                (symbol, k_type.name, self._range_start(start_date)),
+            )
+        return result.rowcount
+
     def covers(self, symbol, k_type, begin_date, end_date):
         with self._connect() as connection:
             row = connection.execute(

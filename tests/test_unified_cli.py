@@ -23,7 +23,7 @@ def test_analyze_defaults_fill_missing_cache_with_baostock_and_use_default_level
     expected_begin_dates = {
         KL_TYPE.K_WEEK: (today - timedelta(days=2400)).isoformat(),
         KL_TYPE.K_DAY: (today - timedelta(days=1200)).isoformat(),
-        KL_TYPE.K_30M: (today - timedelta(days=300)).isoformat(),
+        KL_TYPE.K_30M: (today - timedelta(days=180)).isoformat(),
         KL_TYPE.K_5M: (today - timedelta(days=20)).isoformat(),
     }
     assert mock_chan.call_count == 4
@@ -49,6 +49,7 @@ def test_analyze_defaults_fill_missing_cache_with_baostock_and_use_default_level
         "sz.000001_K_30M.png",
         "sz.000001_K_5M.png",
     ]
+    assert all(call.kwargs["plot_para"]["figure"]["x_range"] == 0 for call in mock_plot.call_args_list)
 
 
 def test_analyze_accepts_sina_and_custom_levels():
@@ -141,6 +142,26 @@ def test_cache_update_defaults_to_auto_mode(tmp_path):
     assert result.exit_code == 0, result.output
     assert [item[1] for item in calls] == ["K_WEEK", "K_DAY", "K_60M", "K_30M", "K_15M", "K_5M", "K_1M"]
     assert all(item[2] == "auto" for item in calls)
+
+
+def test_cache_update_full_requests_full_refresh(tmp_path):
+    full_values = []
+
+    class FakeCache:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def refresh(self, full=False):
+            full_values.append(full)
+
+    with patch("cli.CCache", FakeCache):
+        result = runner.invoke(
+            app,
+            ["cache", "update", "--codes", "600000", "--mode", "eod", "--full", "--cache-path", str(tmp_path / "cache.sqlite3")],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert full_values == [True] * 6
 
 
 def test_cache_update_requires_codes():

@@ -18,6 +18,7 @@ def parse_args(argv=None):
 
     update_parser = subparsers.add_parser("update", help="刷新缓存数据")
     update_parser.add_argument("--mode", choices=["auto", "live", "eod"], default="auto")
+    update_parser.add_argument("--full", action="store_true", help="从完整保留窗口重新拉取数据")
     update_parser.add_argument("--codes", required=True, help="逗号分隔的股票代码")
     update_parser.add_argument("--cache-path", type=Path, default=CCache.DEFAULT_PATH)
 
@@ -35,7 +36,10 @@ def main(argv=None, cache_class=CCache, store_class=CacheStore):
         for code in codes:
             for k_type in types:
                 api = cache_class(code, k_type, cache_path=args.cache_path, mode=args.mode)
-                api.refresh()
+                if args.full:
+                    api.refresh(full=True)
+                else:
+                    api.refresh()
     elif args.command == "status":
         store = store_class(args.cache_path)
         rows = store.status()

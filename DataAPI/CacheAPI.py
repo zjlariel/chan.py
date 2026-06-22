@@ -15,12 +15,13 @@ class CCache(CCommonStockApi):
         KL_TYPE.K_WEEK: 2400,
         KL_TYPE.K_DAY: 1200,
         KL_TYPE.K_60M: 360,
-        KL_TYPE.K_30M: 300,
+        KL_TYPE.K_30M: 180,
         KL_TYPE.K_15M: 90,
         KL_TYPE.K_5M: 20,
         KL_TYPE.K_1M: 5,
     }
     MINUTE_TYPES = {KL_TYPE.K_1M, KL_TYPE.K_5M, KL_TYPE.K_15M, KL_TYPE.K_30M, KL_TYPE.K_60M}
+    REFRESH_OVERLAP_DAYS = 3
 
     def __init__(
         self,
@@ -48,16 +49,17 @@ class CCache(CCommonStockApi):
         if not self.store.covers(self.symbol, self.k_type, begin_date, end_date):
             provider_name = self._provider_name()
             if provider_name:
-                self._refresh(provider_name, begin_date, end_date)
+                self._refresh(provider_name, begin_date, end_date, begin_date)
         yield from self.store.read_bars(self.symbol, self.k_type, begin_date, end_date)
 
-    def refresh(self):
+    def refresh(self, full=False):
         begin_date, end_date = self._requested_range()
         provider_name = self._provider_name()
         if provider_name:
-            self._refresh(provider_name, begin_date, end_date)
+            fetch_begin = begin_date if full or not self.store.covers(self.symbol, self.k_type, begin_date, end_date) else self._incremental_begin(begin_date)
+            self._refresh(provider_name, fetch_begin, end_date, begin_date)
 
-    def _refresh(self, provider_name, begin_date, end_date):
+    def _refresh(self, provider_name, begin_date, end_date, retention_begin=None):
         provider_class = self.provider_classes[provider_name]
         if hasattr(provider_class, "do_init"):
             provider_class.do_init()
@@ -67,7 +69,22 @@ class CCache(CCommonStockApi):
         bars = list(provider.get_kl_data())
         if bars:
             self.store.upsert_bars(self.symbol, self.k_type, bars, provider_name)
-            self.store.mark_covered(self.symbol, self.k_type, begin_date, end_date, provider_name)
+            if retention_begin:
+                self.store.prune_before(self.symbol, self.k_type, retention_begin)
+                self.store.replace_coverage(
+                    self.symbol, self.k_type, retention_begin, end_date, provider_name
+                )
+            else:
+                self.store.mark_covered(self.symbol, self.k_type, begin_date, end_date, provider_name)
+
+    def _incremental_begin(self, retention_begin):
+        latest_timestamp = self.store.latest_timestamp(self.symbol, self.k_type)
+        if not latest_timestamp:
+            return retention_begin
+        overlap_begin = (
+            datetime.fromisoformat(latest_timestamp).date() - timedelta(days=self.REFRESH_OVERLAP_DAYS)
+        ).isoformat()
+        return max(retention_begin, overlap_begin)
 
     def _requested_range(self):
         end_date = self.end_date[:10] if self.end_date else self.now.date().isoformat()

@@ -41,3 +41,18 @@ def test_records_coverage_ranges(tmp_path: Path):
 
     assert store.covers("sh600000", KL_TYPE.K_DAY, "2024-01-01", "2026-06-18")
     assert not store.covers("sh600000", KL_TYPE.K_DAY, "2022-12-31", "2026-06-18")
+
+
+def test_prunes_old_bars_and_reports_latest_timestamp(tmp_path: Path):
+    store = CacheStore(tmp_path / "cache.sqlite3")
+    store.upsert_bars(
+        "sh600000",
+        KL_TYPE.K_5M,
+        [make_bar(17, 9, 30, 9.1), make_bar(18, 9, 30, 9.2)],
+        "baostock",
+    )
+
+    deleted = store.prune_before("sh600000", KL_TYPE.K_5M, "2026-06-18")
+
+    assert deleted == 1
+    assert store.latest_timestamp("sh600000", KL_TYPE.K_5M) == "2026-06-18 09:30"

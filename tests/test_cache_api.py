@@ -101,6 +101,26 @@ def test_end_of_day_cache_uses_qfq_when_autype_is_omitted(tmp_path):
     assert FakeBao.calls[0][-1] == AUTYPE.QFQ
 
 
+def test_subsequent_refresh_uses_a_short_overlap_instead_of_full_window(tmp_path):
+    FakeSina.calls = []
+    FakeBao.calls = []
+    api = CCache(
+        "002460",
+        KL_TYPE.K_DAY,
+        "2026-06-01",
+        "2026-06-18",
+        cache_path=tmp_path / "cache.sqlite3",
+        now=datetime(2026, 6, 18, 19, 0),
+        provider_classes={"sina": FakeSina, "baostock": FakeBao},
+    )
+
+    api.refresh()
+    api.refresh()
+
+    assert FakeBao.calls[0][2:4] == ("2026-06-01", "2026-06-18")
+    assert FakeBao.calls[1][2:4] == ("2026-06-15", "2026-06-18")
+
+
 def test_end_of_day_skips_one_minute_refresh(tmp_path):
     api = build_api(tmp_path, KL_TYPE.K_1M, datetime(2026, 6, 18, 19, 0))
 

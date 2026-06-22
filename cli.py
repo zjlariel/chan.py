@@ -21,7 +21,7 @@ DEFAULT_LEVELS = [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
 DEFAULT_LOOKBACK_DAYS = {
     KL_TYPE.K_WEEK: 2400,
     KL_TYPE.K_DAY: 1200,
-    KL_TYPE.K_30M: 300,
+    KL_TYPE.K_30M: 180,
     KL_TYPE.K_5M: 20,
 }
 DATA_SOURCE_MAP = {
@@ -106,7 +106,7 @@ def _default_plot_para():
     return {
         "seg": {},
         "bi": {},
-        "figure": {"x_range": 200},
+        "figure": {"x_range": 0},
         "marker": {},
     }
 
@@ -171,6 +171,7 @@ app.add_typer(cache_app, name="cache")
 def cache_update(
     codes: Annotated[str, typer.Option("--codes", help="逗号分隔的股票代码")],
     mode: Annotated[str, typer.Option("--mode", help="刷新模式：auto、live 或 eod")] = "auto",
+    full: Annotated[bool, typer.Option("--full", help="从完整保留窗口重新拉取数据")] = False,
     cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
 ):
     if mode not in {"auto", "live", "eod"}:
@@ -180,7 +181,10 @@ def cache_update(
     for code in [c.strip() for c in codes.split(",") if c.strip()]:
         for k_type in types:
             api = CCache(code, k_type, cache_path=cache_path, mode=mode)
-            api.refresh()
+            if full:
+                api.refresh(full=True)
+            else:
+                api.refresh()
 
 
 @cache_app.command(name="status", help="展示缓存状态")
