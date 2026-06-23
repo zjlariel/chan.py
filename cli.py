@@ -13,6 +13,8 @@ from Chan import CChan
 from ChanConfig import CChanConfig
 from App.analysis_export import build_document
 from App.analysis_summary import format_summary
+from App.portfolio_analysis import build_advice
+from App.portfolio_store import PortfolioStore
 from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
 from DataAPI.CacheAPI import CCache
 from DataAPI.CacheStore import CacheStore
@@ -184,6 +186,8 @@ def analyze(
 
 cache_app = typer.Typer(help="离线缓存管理")
 app.add_typer(cache_app, name="cache")
+portfolio_app = typer.Typer(help="持仓与观察股跟踪")
+app.add_typer(portfolio_app, name="portfolio")
 
 
 @cache_app.command(name="update", help="刷新缓存数据")
@@ -201,9 +205,18 @@ def cache_update(
         for k_type in types:
             api = CCache(code, k_type, cache_path=cache_path, mode=mode)
             if full:
-                api.refresh(full=True)
+                refresh_counts = api.refresh(full=True)
             else:
-                api.refresh()
+                refresh_counts = api.refresh()
+            refresh_counts = refresh_counts or {}
+            inserted = sum(stats["inserted"] for stats in refresh_counts.values())
+            updated = sum(stats["updated"] for stats in refresh_counts.values())
+            source_summary = "，".join(
+                f"{source}：新增 {stats['inserted']}，覆盖 {stats['updated']}"
+                for source, stats in refresh_counts.items()
+            )
+            detail = f"（{source_summary}）" if source_summary else ""
+            typer.echo(f"{code} {k_type.name}：新增 {inserted} 根，覆盖 {updated} 根{detail}")
 
 
 @cache_app.command(name="status", help="展示缓存状态")
@@ -222,6 +235,96 @@ def cache_status(
             f"{row['symbol']:<10} {row['k_type']:<10} {row['first_timestamp']:<20} "
             f"{row['last_timestamp']:<20} {row['bar_count']:<10} {row['updated_at']:<20}"
         )
+
+
+@portfolio_app.command(name="init", help="初始化持仓与观察股表")
+def portfolio_init(
+    cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
+):
+    store = PortfolioStore(cache_path)
+    store.initialize()
+    typer.echo("已初始化跟踪股票表")
+
+
+@portfolio_app.command(name="set", help="新增或更新观察股、持仓股")
+def portfolio_set(
+    code: Annotated[str, typer.Option("--code", help="A 股代码")],
+    name: Annotated[str, typer.Option("--name", help="股票名称")],
+    quantity: Annotated[int, typer.Option("--quantity", help="持仓数量；0 表示观察股")],
+    available_quantity: Annotated[Optional[int], typer.Option("--available", help="可用数量")] = None,
+    cost_price: Annotated[Optional[float], typer.Option("--cost-price", help="持仓成本价")]=None,
+    group_name: Annotated[Optional[str], typer.Option("--group", help="可选分组")]=None,
+    note: Annotated[Optional[str], typer.Option("--note", help="备注")]=None,
+    cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
+):
+    store = PortfolioStore(cache_path)
+    store.set_position(code, name, quantity, available_quantity, cost_price, group_name, note)
+    typer.echo(f"已更新 {code}")
+
+
+@portfolio_app.command(name="list", help="列出持仓与观察股")
+def portfolio_list(
+    cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
+):
+    positions = PortfolioStore(cache_path).list_positions()
+    if not positions:
+        typer.echo("没有跟踪股票")
+        return
+    typer.echo(f"{'状态':<8} {'代码':<8} {'名称':<12} {'持仓':<8} {'可用':<8} {'成本':<10}")
+    for position in positions:
+        status = "持仓" if position["status"] == "holding" else "观察"
+        cost = "-" if position["cost_price"] is None else f"{position['cost_price']:.3f}"
+        typer.echo(
+            f"{status:<8} {position['symbol']:<8} {position['name']:<12} {position['quantity']:<8} "
+            f"{position['available_quantity']:<8} {cost:<10}"
+        )
+
+
+@portfolio_app.command(name="analyze", help="分析持仓卖点与观察股买点")
+def portfolio_analyze(
+    refresh: Annotated[bool, typer.Option("--refresh", help="先按 auto 模式刷新缓存")] = False,
+    cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
+):
+    positions = PortfolioStore(cache_path).list_positions()
+    if not positions:
+        typer.echo("没有跟踪股票")
+        return
+    for title, status in (("持仓股", "holding"), ("观察股", "watching")):
+        selected = [position for position in positions if position["status"] == status]
+        if not selected:
+            continue
+        typer.echo(f"\n{title}")
+        for position in selected:
+            levels, latest_price = _portfolio_analysis_levels(position["symbol"], cache_path, refresh)
+            advice = build_advice(position, levels, latest_price)
+            typer.echo(f"{position['name']} ({position['symbol']})：{advice['priority']}")
+            typer.echo(f"  {advice['basis']}")
+
+
+def _portfolio_analysis_levels(code, cache_path, refresh):
+    begin_time = _begin_time(DEFAULT_LEVELS, None, date.today())
+    if refresh:
+        for level in DEFAULT_LEVELS:
+            CCache(code, level, cache_path=cache_path, mode="auto").refresh()
+
+    levels = {}
+    latest_price = None
+    for level in DEFAULT_LEVELS:
+        cache = CCache(code, level, begin_time[level], None, AUTYPE.QFQ, cache_path=cache_path, mode="eod")
+        bars = list(cache.get_kl_data())
+        if bars and (latest_price is None or level == KL_TYPE.K_5M):
+            latest_price = bars[-1].close
+        chan = CChan(
+            code=code,
+            begin_time={level: begin_time[level]},
+            end_time=None,
+            data_src=DATA_SRC.CACHE,
+            lv_list=[level],
+            config=_default_chan_config(),
+            autype=AUTYPE.QFQ,
+        )
+        levels[level.name] = build_document(code, "cache", {level: chan[level]})["levels"][level.name]
+    return levels, latest_price
 
 
 if __name__ == "__main__":

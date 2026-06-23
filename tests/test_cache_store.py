@@ -25,13 +25,15 @@ def test_upserts_and_reads_ordered_bars(tmp_path: Path):
     early = make_bar(18, 9, 30, 9.1)
     late = make_bar(18, 9, 35, 9.2)
 
-    store.upsert_bars("sh600000", KL_TYPE.K_5M, [late, early], "sina")
-    store.upsert_bars("sh600000", KL_TYPE.K_5M, [make_bar(18, 9, 35, 9.3)], "baostock")
+    first_write = store.upsert_bars("sh600000", KL_TYPE.K_5M, [late, early], "sina")
+    repeated_write = store.upsert_bars("sh600000", KL_TYPE.K_5M, [make_bar(18, 9, 35, 9.3)], "baostock")
 
     bars = store.read_bars("sh600000", KL_TYPE.K_5M, "2026-06-18", "2026-06-18")
 
     assert [bar.time.to_str() for bar in bars] == ["2026/06/18 09:30", "2026/06/18 09:35"]
     assert bars[-1].close == 9.3
+    assert first_write == {"inserted": 2, "updated": 0}
+    assert repeated_write == {"inserted": 0, "updated": 1}
 
 
 def test_records_coverage_ranges(tmp_path: Path):

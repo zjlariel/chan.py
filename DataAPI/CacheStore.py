@@ -59,7 +59,21 @@ class CacheStore:
                 )
             )
         if not rows:
-            return
+            return {"inserted": 0, "updated": 0}
+        timestamps = {row[2] for row in rows}
+        with self._connect() as connection:
+            existing_timestamps = {
+                row["timestamp"]
+                for row in connection.execute(
+                    """
+                    SELECT timestamp FROM bars
+                    WHERE symbol = ? AND k_type = ? AND timestamp >= ? AND timestamp <= ?
+                    """,
+                    (symbol, k_type.name, min(timestamps), max(timestamps)),
+                )
+            }
+        inserted = len(timestamps - existing_timestamps)
+        updated = len(rows) - inserted
         updated_at = self._now()
         rows = [row + (updated_at,) for row in rows]
         with self._connect() as connection:
@@ -79,6 +93,7 @@ class CacheStore:
                 """,
                 rows,
             )
+        return {"inserted": inserted, "updated": updated}
 
     def read_bars(self, symbol, k_type, begin_date=None, end_date=None):
         clauses = ["symbol = ?", "k_type = ?"]

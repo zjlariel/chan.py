@@ -55,34 +55,35 @@ class CCache(CCommonStockApi):
     def refresh(self, full=False):
         begin_date, end_date = self._requested_range()
         if self.mode == "auto":
-            self._refresh_auto(begin_date, end_date, full)
-            return
+            return self._refresh_auto(begin_date, end_date, full)
         provider_name = self._provider_name()
         if provider_name:
             fetch_begin = begin_date if full or not self.store.covers(self.symbol, self.k_type, begin_date, end_date) else self._incremental_begin(begin_date)
-            self._refresh(provider_name, fetch_begin, end_date, begin_date)
+            return self._refresh(provider_name, fetch_begin, end_date, begin_date)
+        return {}
 
     def _refresh_auto(self, begin_date, end_date, full):
         fetch_begin = begin_date if full or not self.store.covers(self.symbol, self.k_type, begin_date, end_date) else self._incremental_begin(begin_date)
         today = self.now.date().isoformat()
         yesterday = (self.now.date() - timedelta(days=1)).isoformat()
-        refreshed = False
+        refresh_counts = {}
 
         if self.k_type in self.MINUTE_TYPES and self.k_type != KL_TYPE.K_1M:
             history_end = min(end_date, yesterday)
             if fetch_begin <= history_end:
-                refreshed = self._refresh("baostock", fetch_begin, history_end) or refreshed
+                self._merge_refresh_counts(refresh_counts, self._refresh("baostock", fetch_begin, history_end))
 
         if self.k_type in self.MINUTE_TYPES:
             today_begin = max(fetch_begin, today)
             if today_begin <= end_date:
-                refreshed = self._refresh("sina", today_begin, end_date) or refreshed
+                self._merge_refresh_counts(refresh_counts, self._refresh("sina", today_begin, end_date))
         elif fetch_begin <= min(end_date, yesterday):
-            refreshed = self._refresh("baostock", fetch_begin, min(end_date, yesterday)) or refreshed
+            self._merge_refresh_counts(refresh_counts, self._refresh("baostock", fetch_begin, min(end_date, yesterday)))
 
-        if refreshed:
+        if refresh_counts:
             self.store.prune_before(self.symbol, self.k_type, begin_date)
             self.store.replace_coverage(self.symbol, self.k_type, begin_date, end_date, "auto")
+        return refresh_counts
 
     def _refresh(self, provider_name, begin_date, end_date, retention_begin=None):
         provider_class = self.provider_classes[provider_name]
@@ -93,7 +94,7 @@ class CCache(CCommonStockApi):
         )
         bars = list(provider.get_kl_data())
         if bars:
-            self.store.upsert_bars(self.symbol, self.k_type, bars, provider_name)
+            written = self.store.upsert_bars(self.symbol, self.k_type, bars, provider_name)
             if retention_begin:
                 self.store.prune_before(self.symbol, self.k_type, retention_begin)
                 self.store.replace_coverage(
@@ -101,8 +102,15 @@ class CCache(CCommonStockApi):
                 )
             else:
                 self.store.mark_covered(self.symbol, self.k_type, begin_date, end_date, provider_name)
-            return True
-        return False
+            return {provider_name: written}
+        return {}
+
+    @staticmethod
+    def _merge_refresh_counts(target, source):
+        for provider_name, stats in source.items():
+            target.setdefault(provider_name, {"inserted": 0, "updated": 0})
+            for key in ("inserted", "updated"):
+                target[provider_name][key] += stats[key]
 
     def _incremental_begin(self, retention_begin):
         latest_timestamp = self.store.latest_timestamp(self.symbol, self.k_type)

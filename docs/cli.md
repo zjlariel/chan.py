@@ -109,3 +109,20 @@ chanpy cache status [OPTIONS]
 chanpy cache status
 chanpy cache status --cache-path .chanpy/cache.sqlite3
 ```
+
+---
+
+## portfolio：持仓与观察股跟踪
+
+持仓与观察股都存储在缓存 SQLite 的 `tracked_stocks` 表中：数量为 `0` 表示观察股，数量大于 `0` 表示持仓股。
+
+```bash
+chanpy portfolio init
+chanpy portfolio list
+chanpy portfolio set --code 000001 --name 平安银行 --quantity 0
+chanpy portfolio set --code 002536 --name 飞龙股份 --quantity 400 --available 400 --cost-price 41.343
+chanpy portfolio analyze
+chanpy portfolio analyze --refresh
+```
+
+`portfolio analyze` 优先显示持仓股的卖点和成本价风险信息，再显示观察股的买点与关注优先级。它是规则化技术分析提示，不会自动执行交易。

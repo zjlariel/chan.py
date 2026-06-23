@@ -137,10 +137,14 @@ def test_auto_refresh_uses_baostock_for_history_and_sina_for_today(tmp_path):
         mode="auto",
     )
 
-    api.refresh()
+    result = api.refresh()
 
     assert FakeBao.calls[0][2:4] == ("2026-06-01", "2026-06-17")
     assert FakeSina.calls[0][2:4] == ("2026-06-18", "2026-06-18")
+    assert result == {
+        "baostock": {"inserted": 1, "updated": 0},
+        "sina": {"inserted": 0, "updated": 1},
+    }
 
 
 def test_end_of_day_skips_one_minute_refresh(tmp_path):
