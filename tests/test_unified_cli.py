@@ -178,6 +178,32 @@ def test_cache_update_defaults_to_auto_mode(tmp_path):
     assert all(item[2] == "auto" for item in calls)
 
 
+def test_cache_update_all_updates_active_tracked_stocks(tmp_path):
+    calls = []
+
+    class FakeCache:
+        def __init__(self, code, k_type, **kwargs):
+            self.code = code
+            self.k_type = k_type
+
+        def refresh(self, full=False):
+            calls.append((self.code, self.k_type.name))
+            return {}
+
+    class FakePortfolioStore:
+        def __init__(self, path):
+            self.path = path
+
+        def list_positions(self):
+            return [{"symbol": "002536"}, {"symbol": "600549"}]
+
+    with patch("cli.CCache", FakeCache), patch("cli.PortfolioStore", FakePortfolioStore):
+        result = runner.invoke(app, ["cache", "update", "--all", "--mode", "eod", "--cache-path", str(tmp_path / "cache.sqlite3")])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [(code, k_type) for code in ["002536", "600549"] for k_type in ["K_WEEK", "K_DAY", "K_60M", "K_30M", "K_15M", "K_5M"]]
+
+
 def test_cache_update_prints_written_bar_counts_by_source(tmp_path):
     class FakeCache:
         def __init__(self, code, k_type, **kwargs):
@@ -217,10 +243,11 @@ def test_cache_update_full_requests_full_refresh(tmp_path):
     assert full_values == [True] * 6
 
 
-def test_cache_update_requires_codes():
+def test_cache_update_requires_codes_or_all():
     result = runner.invoke(app, ["cache", "update", "--mode", "live"])
     assert result.exit_code != 0
     assert "--codes" in result.output
+    assert "--all" in result.output
 
 
 def test_cache_status_prints_summary(tmp_path):

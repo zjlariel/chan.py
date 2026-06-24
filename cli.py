@@ -192,16 +192,23 @@ app.add_typer(portfolio_app, name="portfolio")
 
 @cache_app.command(name="update", help="刷新缓存数据")
 def cache_update(
-    codes: Annotated[str, typer.Option("--codes", help="逗号分隔的股票代码")],
+    codes: Annotated[Optional[str], typer.Option("--codes", help="逗号分隔的股票代码")] = None,
+    all_stocks: Annotated[bool, typer.Option("--all", help="更新数据库中全部启用的跟踪股票")] = False,
     mode: Annotated[str, typer.Option("--mode", help="刷新模式：auto、live 或 eod")] = "auto",
     full: Annotated[bool, typer.Option("--full", help="从完整保留窗口重新拉取数据")] = False,
     cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
 ):
     if mode not in {"auto", "live", "eod"}:
         raise typer.BadParameter("mode 必须是 auto、live 或 eod")
+    if bool(codes) == all_stocks:
+        raise typer.BadParameter("必须且只能指定 --codes 或 --all")
 
     types = LIVE_TYPES if mode == "live" else EOD_TYPES if mode == "eod" else AUTO_TYPES
-    for code in [c.strip() for c in codes.split(",") if c.strip()]:
+    if all_stocks:
+        code_list = [position["symbol"] for position in PortfolioStore(cache_path).list_positions()]
+    else:
+        code_list = [code.strip() for code in codes.split(",") if code.strip()]
+    for code in code_list:
         for k_type in types:
             api = CCache(code, k_type, cache_path=cache_path, mode=mode)
             if full:

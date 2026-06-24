@@ -87,7 +87,10 @@ chanpy cache update [OPTIONS]
 ```bash
 chanpy cache update --mode live --codes 600000,000001
 chanpy cache update --mode eod --codes sz.002536 --cache-path .chanpy/cache.sqlite3
+chanpy cache update --all
 ```
+
+`--all` 会读取 SQLite 中 `tracked_stocks` 表的全部启用股票，并按指定模式更新；它与 `--codes` 不能同时使用。
 
 ---
 
