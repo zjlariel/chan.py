@@ -126,6 +126,9 @@ chanpy portfolio set --code 000001 --name 平安银行 --quantity 0
 chanpy portfolio set --code 002536 --name 飞龙股份 --quantity 400 --available 400 --cost-price 41.343
 chanpy portfolio analyze
 chanpy portfolio analyze --refresh
+chanpy portfolio analyze --code 002050 --refresh
 ```
 
-`portfolio analyze` 优先显示持仓股的卖点和成本价风险信息，再显示观察股的买点与关注优先级。它是规则化技术分析提示，不会自动执行交易。
+`portfolio analyze` 使用周线作为趋势背景、日线作为决策级别、30 分钟作为确认级别；不使用 5 分钟信号。持仓股同时显示卖点风险和加仓候选，观察股显示买点与关注优先级。它是规则化技术分析提示，不会自动执行交易。
+
+使用 `portfolio analyze --code <代码>` 分析未写入跟踪表的股票时，会以“临时观察股”身份分析，不会自动保存到数据库。

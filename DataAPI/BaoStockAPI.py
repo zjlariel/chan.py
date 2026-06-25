@@ -1,4 +1,5 @@
 import baostock as bs
+from contextlib import contextmanager
 
 from Common.CEnum import AUTYPE, DATA_FIELD, KL_TYPE
 from Common.CTime import CTime
@@ -56,6 +57,7 @@ def GetColumnNameFromFieldList(fileds: str):
 
 class CBaoStock(CCommonStockApi):
     is_connect = None
+    keep_alive_depth = 0
 
     def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
         super(CBaoStock, self).__init__(self.normalize_symbol(code), k_type, begin_date, end_date, autype)
@@ -114,9 +116,26 @@ class CBaoStock(CCommonStockApi):
 
     @classmethod
     def do_close(cls):
+        if cls.keep_alive_depth > 0:
+            return
+        cls._logout()
+
+    @classmethod
+    def _logout(cls):
         if cls.is_connect:
             bs.logout()
             cls.is_connect = None
+
+    @classmethod
+    @contextmanager
+    def keep_alive(cls):
+        cls.keep_alive_depth += 1
+        try:
+            yield
+        finally:
+            cls.keep_alive_depth -= 1
+            if cls.keep_alive_depth == 0:
+                cls._logout()
 
     def __convert_type(self):
         _dict = {

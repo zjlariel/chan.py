@@ -16,6 +16,7 @@ from App.analysis_summary import format_summary
 from App.portfolio_analysis import build_advice
 from App.portfolio_store import PortfolioStore
 from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
+from DataAPI.BaoStockAPI import CBaoStock
 from DataAPI.CacheAPI import CCache
 from DataAPI.CacheStore import CacheStore
 from Plot.AnimatePlotDriver import CAnimateDriver
@@ -24,6 +25,7 @@ from Plot.PlotDriver import CPlotDriver
 app = typer.Typer(help="缠论命令行工具")
 
 DEFAULT_LEVELS = [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
+PORTFOLIO_LEVELS = [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_30M]
 DEFAULT_LOOKBACK_DAYS = {
     KL_TYPE.K_WEEK: 2400,
     KL_TYPE.K_DAY: 1200,
@@ -208,22 +210,23 @@ def cache_update(
         code_list = [position["symbol"] for position in PortfolioStore(cache_path).list_positions()]
     else:
         code_list = [code.strip() for code in codes.split(",") if code.strip()]
-    for code in code_list:
-        for k_type in types:
-            api = CCache(code, k_type, cache_path=cache_path, mode=mode)
-            if full:
-                refresh_counts = api.refresh(full=True)
-            else:
-                refresh_counts = api.refresh()
-            refresh_counts = refresh_counts or {}
-            inserted = sum(stats["inserted"] for stats in refresh_counts.values())
-            updated = sum(stats["updated"] for stats in refresh_counts.values())
-            source_summary = "，".join(
-                f"{source}：新增 {stats['inserted']}，覆盖 {stats['updated']}"
-                for source, stats in refresh_counts.items()
-            )
-            detail = f"（{source_summary}）" if source_summary else ""
-            typer.echo(f"{code} {k_type.name}：新增 {inserted} 根，覆盖 {updated} 根{detail}")
+    with CBaoStock.keep_alive():
+        for code in code_list:
+            for k_type in types:
+                api = CCache(code, k_type, cache_path=cache_path, mode=mode)
+                if full:
+                    refresh_counts = api.refresh(full=True)
+                else:
+                    refresh_counts = api.refresh()
+                refresh_counts = refresh_counts or {}
+                inserted = sum(stats["inserted"] for stats in refresh_counts.values())
+                updated = sum(stats["updated"] for stats in refresh_counts.values())
+                source_summary = "，".join(
+                    f"{source}：新增 {stats['inserted']}，覆盖 {stats['updated']}"
+                    for source, stats in refresh_counts.items()
+                )
+                detail = f"（{source_summary}）" if source_summary else ""
+                typer.echo(f"{code} {k_type.name}：新增 {inserted} 根，覆盖 {updated} 根{detail}")
 
 
 @cache_app.command(name="status", help="展示缓存状态")
@@ -289,37 +292,61 @@ def portfolio_list(
 
 @portfolio_app.command(name="analyze", help="分析持仓卖点与观察股买点")
 def portfolio_analyze(
+    code: Annotated[Optional[str], typer.Option("--code", help="仅分析指定的已跟踪股票")] = None,
     refresh: Annotated[bool, typer.Option("--refresh", help="先按 auto 模式刷新缓存")] = False,
     cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
 ):
     positions = PortfolioStore(cache_path).list_positions()
+    ad_hoc_stock = False
+    if code:
+        normalized_code = _normalize_portfolio_code(code)
+        positions = [position for position in positions if position["symbol"] == normalized_code]
+        if not positions:
+            positions = [{
+                "symbol": normalized_code,
+                "name": "临时观察股",
+                "quantity": 0,
+                "cost_price": None,
+                "status": "watching",
+            }]
+            ad_hoc_stock = True
     if not positions:
         typer.echo("没有跟踪股票")
         return
-    for title, status in (("持仓股", "holding"), ("观察股", "watching")):
-        selected = [position for position in positions if position["status"] == status]
-        if not selected:
-            continue
-        typer.echo(f"\n{title}")
-        for position in selected:
-            levels, latest_price = _portfolio_analysis_levels(position["symbol"], cache_path, refresh)
-            advice = build_advice(position, levels, latest_price)
-            typer.echo(f"{position['name']} ({position['symbol']})：{advice['priority']}")
-            typer.echo(f"  {advice['basis']}")
+    with CBaoStock.keep_alive():
+        for title, status in (("持仓股", "holding"), ("观察股", "watching")):
+            selected = [position for position in positions if position["status"] == status]
+            if not selected:
+                continue
+            if ad_hoc_stock and status == "watching":
+                title = "临时观察股"
+            typer.echo(f"\n{title}")
+            for position in selected:
+                levels, latest_price = _portfolio_analysis_levels(position["symbol"], cache_path, refresh)
+                advice = build_advice(position, levels, latest_price)
+                typer.echo(f"{position['name']} ({position['symbol']})：{advice['priority']}")
+                typer.echo(f"  {advice['basis']}")
+
+
+def _normalize_portfolio_code(code):
+    normalized = str(code).lower().replace(".", "")
+    if normalized[:2] in {"sh", "sz"}:
+        normalized = normalized[2:]
+    return normalized
 
 
 def _portfolio_analysis_levels(code, cache_path, refresh):
-    begin_time = _begin_time(DEFAULT_LEVELS, None, date.today())
+    begin_time = _begin_time(PORTFOLIO_LEVELS, None, date.today())
     if refresh:
-        for level in DEFAULT_LEVELS:
+        for level in PORTFOLIO_LEVELS:
             CCache(code, level, cache_path=cache_path, mode="auto").refresh()
 
     levels = {}
     latest_price = None
-    for level in DEFAULT_LEVELS:
+    for level in PORTFOLIO_LEVELS:
         cache = CCache(code, level, begin_time[level], None, AUTYPE.QFQ, cache_path=cache_path, mode="eod")
         bars = list(cache.get_kl_data())
-        if bars and (latest_price is None or level == KL_TYPE.K_5M):
+        if bars and (latest_price is None or level == KL_TYPE.K_30M):
             latest_price = bars[-1].close
         chan = CChan(
             code=code,

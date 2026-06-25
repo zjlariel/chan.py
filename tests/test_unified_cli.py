@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -5,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from Common.CEnum import DATA_SRC, KL_TYPE
-from cli import DEFAULT_LEVELS, _portfolio_analysis_levels, app
+from cli import DEFAULT_LEVELS, PORTFOLIO_LEVELS, _portfolio_analysis_levels, app
 
 runner = CliRunner()
 
@@ -204,6 +205,29 @@ def test_cache_update_all_updates_active_tracked_stocks(tmp_path):
     assert calls == [(code, k_type) for code in ["002536", "600549"] for k_type in ["K_WEEK", "K_DAY", "K_60M", "K_30M", "K_15M", "K_5M"]]
 
 
+def test_cache_update_wraps_multiple_stocks_in_one_baostock_session(tmp_path):
+    sessions = []
+
+    @contextmanager
+    def fake_keep_alive():
+        sessions.append("enter")
+        yield
+        sessions.append("exit")
+
+    class FakeCache:
+        def __init__(self, code, k_type, **kwargs):
+            pass
+
+        def refresh(self, full=False):
+            return {}
+
+    with patch("cli.CCache", FakeCache), patch("cli.CBaoStock.keep_alive", fake_keep_alive):
+        result = runner.invoke(app, ["cache", "update", "--codes", "002536,600549", "--mode", "eod", "--cache-path", str(tmp_path / "cache.sqlite3")])
+
+    assert result.exit_code == 0, result.output
+    assert sessions == ["enter", "exit"]
+
+
 def test_cache_update_prints_written_bar_counts_by_source(tmp_path):
     class FakeCache:
         def __init__(self, code, k_type, **kwargs):
@@ -329,13 +353,73 @@ def test_portfolio_analyze_outputs_holding_and_watch_sections(tmp_path):
     assert "平安银行" in result.output
 
 
+def test_portfolio_analyze_wraps_multiple_stocks_in_one_baostock_session(tmp_path):
+    sessions = []
+    positions = [
+        {"symbol": "002536", "name": "飞龙股份", "quantity": 400, "cost_price": 41.343, "status": "holding"},
+        {"symbol": "600549", "name": "厦门钨业", "quantity": 200, "cost_price": 65.086, "status": "holding"},
+    ]
+    levels = {"K_WEEK": {"buy_sell_points": []}, "K_DAY": {"buy_sell_points": []}, "K_30M": {"buy_sell_points": []}}
+
+    @contextmanager
+    def fake_keep_alive():
+        sessions.append("enter")
+        yield
+        sessions.append("exit")
+
+    with (
+        patch("cli.PortfolioStore") as mock_store,
+        patch("cli._portfolio_analysis_levels", return_value=(levels, 43.07)),
+        patch("cli.CBaoStock.keep_alive", fake_keep_alive),
+    ):
+        mock_store.return_value.list_positions.return_value = positions
+
+        result = runner.invoke(app, ["portfolio", "analyze", "--cache-path", str(tmp_path / "cache.sqlite3")])
+
+    assert result.exit_code == 0, result.output
+    assert sessions == ["enter", "exit"]
+
+
+def test_portfolio_analyze_code_limits_refresh_and_analysis_to_one_tracked_stock(tmp_path):
+    positions = [
+        {"symbol": "002050", "name": "三花智控", "quantity": 0, "cost_price": None, "status": "watching"},
+        {"symbol": "002536", "name": "飞龙股份", "quantity": 0, "cost_price": None, "status": "watching"},
+    ]
+    levels = {"K_WEEK": {"buy_sell_points": []}, "K_DAY": {"buy_sell_points": []}, "K_30M": {"buy_sell_points": []}}
+    with patch("cli.PortfolioStore") as mock_store, patch("cli._portfolio_analysis_levels", return_value=(levels, 43.07)) as mock_levels:
+        mock_store.return_value.list_positions.return_value = positions
+
+        result = runner.invoke(app, ["portfolio", "analyze", "--code", "sz.002050", "--refresh", "--cache-path", str(tmp_path / "cache.sqlite3")])
+
+    assert result.exit_code == 0, result.output
+    assert "三花智控" in result.output
+    assert "飞龙股份" not in result.output
+    assert mock_levels.call_args.args[0] == "002050"
+    assert mock_levels.call_args.args[2] is True
+
+
+def test_portfolio_analyze_code_allows_untracked_stock_without_persisting_it(tmp_path):
+    levels = {"K_WEEK": {"buy_sell_points": []}, "K_DAY": {"buy_sell_points": []}, "K_30M": {"buy_sell_points": []}}
+    with patch("cli.PortfolioStore") as mock_store, patch("cli._portfolio_analysis_levels", return_value=(levels, 10.0)) as mock_levels:
+        mock_store.return_value.list_positions.return_value = []
+
+        result = runner.invoke(app, ["portfolio", "analyze", "--code", "002240", "--refresh", "--cache-path", str(tmp_path / "cache.sqlite3")])
+
+    assert result.exit_code == 0, result.output
+    assert "临时观察股" in result.output
+    assert "002240" in result.output
+    assert mock_levels.call_args.args[0] == "002240"
+    assert not mock_store.return_value.set_position.called
+
+
 def test_portfolio_analysis_calculates_each_level_independently(tmp_path):
     fake_bar = MagicMock(close=43.07)
     fake_cache = MagicMock()
     fake_cache.get_kl_data.return_value = iter([fake_bar])
-    document = {"levels": {level.name: {"buy_sell_points": []} for level in DEFAULT_LEVELS}}
+    document = {"levels": {level.name: {"buy_sell_points": []} for level in PORTFOLIO_LEVELS}}
     with patch("cli.CCache", return_value=fake_cache), patch("cli.CChan") as mock_chan, patch("cli.build_document", return_value=document):
         _portfolio_analysis_levels("002536", tmp_path / "cache.sqlite3", refresh=False)
 
-    assert mock_chan.call_count == len(DEFAULT_LEVELS)
-    assert [call.kwargs["lv_list"] for call in mock_chan.call_args_list] == [[level] for level in DEFAULT_LEVELS]
+    assert mock_chan.call_count == len(PORTFOLIO_LEVELS)
+    assert [call.kwargs["lv_list"] for call in mock_chan.call_args_list] == [[level] for level in PORTFOLIO_LEVELS]
+    assert KL_TYPE.K_5M not in PORTFOLIO_LEVELS
