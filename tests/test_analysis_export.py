@@ -9,9 +9,26 @@ class FakeTime:
         return self.value
 
 
+class FakeMacd:
+    def __init__(self, dif, dea, macd):
+        self.DIF = dif
+        self.DEA = dea
+        self.macd = macd
+
+
+class FakeKdj:
+    def __init__(self, k, d, j):
+        self.k = k
+        self.d = d
+        self.j = j
+
+
 class FakeKlu:
-    def __init__(self, time):
+    def __init__(self, time, macd=None, kdj=None):
         self.time = FakeTime(time)
+        self.macd = macd
+        if kdj is not None:
+            self.kdj = kdj
 
 
 class FakeEnum:
@@ -138,6 +155,39 @@ def test_serializes_structural_collections_in_chronological_order():
 
     for field in ["bi", "segments", "seg_segments", "zs", "seg_zs"]:
         assert [item["begin_time"] for item in result[field]] == ["2026/06/20 09:30", "2026/06/20 10:30"]
+
+
+def test_serializes_latest_indicators_and_crosses():
+    class IndicatorLevel(FakeLevel):
+        def klu_iter(self):
+            return iter([
+                FakeKlu("2026/06/20 09:30", FakeMacd(-0.2, -0.1, -0.2), FakeKdj(30, 40, 10)),
+                FakeKlu("2026/06/20 10:00", FakeMacd(0.1, -0.05, 0.3), FakeKdj(45, 42, 51)),
+                FakeKlu("2026/06/20 10:30", FakeMacd(0.02, 0.08, -0.12), FakeKdj(41, 44, 35)),
+            ])
+
+    result = serialize_level(IndicatorLevel())
+
+    assert result["indicators"]["latest"]["macd"] == {
+        "time": "2026/06/20 10:30",
+        "dif": 0.02,
+        "dea": 0.08,
+        "macd": -0.12,
+    }
+    assert result["indicators"]["latest"]["kdj"] == {
+        "time": "2026/06/20 10:30",
+        "k": 41,
+        "d": 44,
+        "j": 35,
+    }
+    assert result["indicators"]["crosses"]["macd"] == [
+        {"time": "2026/06/20 10:00", "type": "golden", "dif": 0.1, "dea": -0.05, "macd": 0.3},
+        {"time": "2026/06/20 10:30", "type": "dead", "dif": 0.02, "dea": 0.08, "macd": -0.12},
+    ]
+    assert result["indicators"]["crosses"]["kdj"] == [
+        {"time": "2026/06/20 10:00", "type": "golden", "k": 45, "d": 42, "j": 51},
+        {"time": "2026/06/20 10:30", "type": "dead", "k": 41, "d": 44, "j": 35},
+    ]
 
 
 def _bsp(idx, time):

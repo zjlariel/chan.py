@@ -4,88 +4,36 @@ LEVEL_LABELS = {
     "K_30M": "30分钟",
 }
 
-
-def build_advice(position, levels, latest_price):
-    if position["status"] == "holding":
-        return _holding_advice(position, levels, latest_price)
-    return _watching_advice(position, levels, latest_price)
-
-
-def _holding_advice(position, levels, latest_price):
-    day_sell = _latest_signal(levels, is_buy=False, level_order=("K_DAY",))
-    day_buy = _latest_signal(levels, is_buy=True, level_order=("K_DAY",))
-    minute_sell = _latest_signal(levels, is_buy=False, level_order=("K_30M",))
-    minute_buy = _latest_signal(levels, is_buy=True, level_order=("K_30M",))
-    if day_sell:
-        signal = minute_sell if _confirms(day_sell, minute_sell) else day_sell
-        priority = "减仓风险确认" if signal is minute_sell else "日线卖点待30分钟确认"
-    elif day_buy:
-        signal = minute_buy if _confirms(day_buy, minute_buy) else day_buy
-        priority = "加仓候选" if signal is minute_buy else "日线买点待30分钟确认"
-    elif minute_sell:
-        signal = minute_sell
-        priority = "30分钟卖点，等待日线确认"
-    elif minute_buy:
-        signal = minute_buy
-        priority = "30分钟买点，等待日线确认"
-    else:
-        signal = None
-        priority = "持有观察"
-
-    basis = [_cost_basis(position["cost_price"], latest_price)]
-    if signal:
-        basis.append(_signal_basis(signal, "买点" if signal[1]["is_buy"] else "卖点"))
-        _append_weekly_context(basis, levels, signal)
-    else:
-        basis.append("未检测到日线或30分钟买卖点")
-    return {"priority": priority, "basis": "；".join(basis), "latest_price": latest_price}
+LEVEL_ORDER = ("K_WEEK", "K_DAY", "K_30M")
+CROSS_LABELS = {
+    "golden": "金叉",
+    "dead": "死叉",
+}
+TREND_LABELS = {
+    "UP": "向上",
+    "DOWN": "向下",
+}
 
 
-def _watching_advice(position, levels, latest_price):
-    day_buy = _latest_signal(levels, is_buy=True, level_order=("K_DAY",))
-    minute_buy = _latest_signal(levels, is_buy=True, level_order=("K_30M",))
-    if day_buy:
-        signal = minute_buy if _confirms(day_buy, minute_buy) else day_buy
-        priority = "重点关注" if signal is minute_buy else "日线买点待30分钟确认"
-    elif minute_buy:
-        signal = minute_buy
-        priority = "30分钟买点，等待日线确认"
-    else:
-        signal = None
-        priority = "暂不关注"
-
-    basis = [_signal_basis(signal, "买点") if signal else "未检测到日线或30分钟买点"]
-    if signal:
-        _append_weekly_context(basis, levels, signal)
-    return {"priority": priority, "basis": "；".join(basis), "latest_price": latest_price}
+def build_observation(position, levels, latest_price):
+    return {
+        "header": _header(position, latest_price),
+        "levels": [_level_observation(level, levels.get(level)) for level in LEVEL_ORDER],
+        "details": _detail_lines(levels),
+        "latest_price": latest_price,
+    }
 
 
-def _latest_signal(levels, is_buy, level_order):
-    signals = []
-    for level in level_order:
-        points = [point for point in levels.get(level, {}).get("buy_sell_points", []) if point["is_buy"] == is_buy]
-        if points:
-            signals.append((level, max(points, key=lambda point: point["time"])))
-    return max(signals, key=lambda signal: signal[1]["time"]) if signals else None
+def _header(position, latest_price):
+    status = "持仓" if position["status"] == "holding" else "观察"
+    parts = [f"{position['name']} ({position['symbol']})：{status}"]
+    price = _price_text(position.get("cost_price"), latest_price)
+    if price:
+        parts.append(price)
+    return "，".join(parts)
 
 
-def _confirms(day_signal, minute_signal):
-    return minute_signal is not None and minute_signal[1]["time"] >= day_signal[1]["time"]
-
-
-def _append_weekly_context(basis, levels, signal):
-    weekly_signal = _latest_signal(levels, is_buy=signal[1]["is_buy"], level_order=("K_WEEK",))
-    if weekly_signal and weekly_signal != signal:
-        label = "买点" if weekly_signal[1]["is_buy"] else "卖点"
-        basis.append(f"周线背景：{_signal_basis(weekly_signal, label)}")
-
-
-def _signal_basis(signal, label):
-    level, point = signal
-    return f"{LEVEL_LABELS[level]}{label} {point['type']}（{point['time']}）"
-
-
-def _cost_basis(cost_price, latest_price):
+def _price_text(cost_price, latest_price):
     if latest_price is None:
         return "缓存中没有最新价格"
     if cost_price is None:
@@ -93,3 +41,197 @@ def _cost_basis(cost_price, latest_price):
     change = (latest_price - cost_price) / cost_price * 100
     relation = "高于" if change >= 0 else "低于"
     return f"最新价 {latest_price:.3f}，{relation}成本 {abs(change):.2f}%"
+
+
+def _level_observation(level, data):
+    label = LEVEL_LABELS[level]
+    if not data:
+        return f"{label}：无数据"
+
+    data_range = data.get("data_range") or {}
+    start = data_range.get("start")
+    end = data_range.get("end")
+    if not start and not end:
+        return f"{label}：无数据"
+    if level == "K_WEEK":
+        return _weekly_background(start, end, data)
+
+    indicators = data.get("indicators") or {}
+    latest = indicators.get("latest") or {}
+    crosses = indicators.get("crosses") or {}
+    parts = [
+        f"数据 {_range_text(start, end)}",
+        f"最新买卖点 {_latest_buy_sell_point(data.get('buy_sell_points') or [])}",
+        f"MACD {_macd_text(latest.get('macd'))}",
+        f"MACD交叉 {_cross_text(crosses.get('macd') or [])}",
+        f"KDJ {_kdj_text(latest.get('kdj'))}",
+        f"KDJ交叉 {_cross_text(crosses.get('kdj') or [])}",
+    ]
+    return f"{label}：" + "；".join(parts)
+
+
+def _range_text(start, end):
+    if start and end:
+        return f"{start} 至 {end}"
+    return start or end or "无"
+
+
+def _weekly_background(start, end, data):
+    return "；".join([
+        f"周线背景：数据 {_range_text(start, end)}",
+        f"趋势 {_trend_text(data)}",
+    ])
+
+
+def _trend_text(data):
+    latest_segment = _latest_structure(data.get("segments") or [])
+    if latest_segment:
+        return _structure_trend_text("线段", latest_segment)
+    latest_bi = _latest_structure(data.get("bi") or [])
+    if latest_bi:
+        return _structure_trend_text("笔", latest_bi)
+    return "无"
+
+
+def _latest_structure(items):
+    if not items:
+        return None
+    return max(items, key=lambda item: item.get("end_time") or item.get("begin_time") or "")
+
+
+def _structure_trend_text(name, item):
+    direction = TREND_LABELS.get(item.get("direction"), item.get("direction", "未知"))
+    begin = item.get("begin_time")
+    end = item.get("end_time")
+    time_text = f"（{_range_text(begin, end)}）" if begin or end else ""
+    return f"{name}{direction}{time_text}"
+
+
+def _latest_buy_sell_point(points):
+    if not points:
+        return "无"
+    point = max(points, key=lambda item: item["time"])
+    direction = "买" if point["is_buy"] else "卖"
+    return f"{direction} {point['type']}（{point['time']}）"
+
+
+def _macd_text(macd):
+    if macd is None:
+        return "无"
+    return f"DIF {macd['dif']:.3f} / DEA {macd['dea']:.3f} / 柱 {macd['macd']:.3f}（{macd['time']}）"
+
+
+def _kdj_text(kdj):
+    if kdj is None:
+        return "无"
+    return f"K {kdj['k']:.2f} / D {kdj['d']:.2f} / J {kdj['j']:.2f}（{kdj['time']}）"
+
+
+def _cross_text(crosses):
+    if not crosses:
+        return "无"
+    cross = max(crosses, key=lambda item: item["time"])
+    return f"{CROSS_LABELS[cross['type']]}（{cross['time']}）"
+
+
+def _detail_lines(levels, limit=5):
+    lines = ["详细报告："]
+    weekly = levels.get("K_WEEK")
+    lines.extend(_weekly_detail_lines(weekly))
+    for level in ("K_DAY", "K_30M"):
+        lines.extend(_decision_level_detail_lines(level, levels.get(level), limit))
+    return lines
+
+
+def _weekly_detail_lines(data):
+    lines = ["  周线背景："]
+    if not data:
+        lines.append("    数据：无")
+        lines.append("    趋势：无")
+        return lines
+    data_range = data.get("data_range") or {}
+    lines.append(f"    数据：{_range_text(data_range.get('start'), data_range.get('end'))}")
+    lines.append(f"    趋势：{_trend_text(data)}")
+    return lines
+
+
+def _decision_level_detail_lines(level, data, limit):
+    label = LEVEL_LABELS[level]
+    lines = [f"  {label}："]
+    if not data:
+        lines.append("    数据：无")
+        lines.append("    最新指标：MACD 无；KDJ 无")
+        lines.append("    最近买卖点：无")
+        lines.append("    最近 MACD 交叉：无")
+        lines.append("    最近 KDJ 交叉：无")
+        lines.append("    结构：无")
+        return lines
+
+    data_range = data.get("data_range") or {}
+    indicators = data.get("indicators") or {}
+    latest = indicators.get("latest") or {}
+    crosses = indicators.get("crosses") or {}
+    lines.append(f"    数据：{_range_text(data_range.get('start'), data_range.get('end'))}")
+    lines.append(f"    最新指标：MACD {_macd_text(latest.get('macd'))}；KDJ {_kdj_text(latest.get('kdj'))}")
+    lines.extend(_list_detail_lines("最近买卖点", _recent_buy_sell_points(data.get("buy_sell_points") or [], limit)))
+    lines.extend(_list_detail_lines("最近 MACD 交叉", _recent_crosses(crosses.get("macd") or [], limit)))
+    lines.extend(_list_detail_lines("最近 KDJ 交叉", _recent_crosses(crosses.get("kdj") or [], limit)))
+    lines.extend(_structure_detail_lines(data))
+    return lines
+
+
+def _list_detail_lines(title, items):
+    if not items:
+        return [f"    {title}：无"]
+    return [f"    {title}：", *[f"      - {item}" for item in items]]
+
+
+def _recent_buy_sell_points(points, limit):
+    recent = sorted(points, key=lambda item: item["time"])[-limit:]
+    return [
+        f"{'买' if point['is_buy'] else '卖'} {point['type']}（{point['time']}）"
+        for point in recent
+    ]
+
+
+def _recent_crosses(crosses, limit):
+    recent = sorted(crosses, key=lambda item: item["time"])[-limit:]
+    return [f"{CROSS_LABELS[cross['type']]}（{cross['time']}）" for cross in recent]
+
+
+def _structure_detail_lines(data):
+    items = []
+    latest_bi = _latest_structure(data.get("bi") or [])
+    if latest_bi:
+        items.append(f"      最新笔：{_structure_detail_text(latest_bi)}")
+    latest_segment = _latest_structure(data.get("segments") or [])
+    if latest_segment:
+        items.append(f"      最新线段：{_structure_detail_text(latest_segment)}")
+    latest_zs = _latest_structure(data.get("zs") or [])
+    if latest_zs:
+        items.append(f"      最新中枢：{_zs_detail_text(latest_zs)}")
+    if not items:
+        return ["    结构：无"]
+    return ["    结构：", *items]
+
+
+def _structure_detail_text(item):
+    direction = TREND_LABELS.get(item.get("direction"), item.get("direction", "未知"))
+    begin = item.get("begin_time")
+    end = item.get("end_time")
+    value_text = _value_range_text(item.get("begin_value"), item.get("end_value"))
+    return f"{direction}（{_range_text(begin, end)}{value_text}）"
+
+
+def _value_range_text(begin_value, end_value):
+    if begin_value is None or end_value is None:
+        return ""
+    return f"，{begin_value:.3f} -> {end_value:.3f}"
+
+
+def _zs_detail_text(zs):
+    sure_text = "已确认" if zs.get("is_sure") else "未确认"
+    return (
+        f"{_range_text(zs.get('begin_time'), zs.get('end_time'))}，"
+        f"区间 {zs['low']:.3f} - {zs['high']:.3f}，{sure_text}"
+    )

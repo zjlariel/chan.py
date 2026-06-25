@@ -353,6 +353,39 @@ def test_portfolio_analyze_outputs_holding_and_watch_sections(tmp_path):
     assert "平安银行" in result.output
 
 
+def test_portfolio_analyze_prints_detailed_report_lines(tmp_path):
+    positions = [
+        {"symbol": "002536", "name": "飞龙股份", "quantity": 400, "cost_price": 41.343, "status": "holding"},
+    ]
+    levels = {
+        "K_WEEK": {
+            "data_range": {"start": "2026/01/01", "end": "2026/06/19"},
+            "segments": [{"direction": "UP", "begin_time": "2026/04/02", "end_time": "2026/06/19"}],
+        },
+        "K_DAY": {
+            "data_range": {"start": "2026/04/01", "end": "2026/06/23"},
+            "buy_sell_points": [{"time": "2026/06/23", "is_buy": True, "type": "2"}],
+            "indicators": {
+                "latest": {
+                    "macd": {"time": "2026/06/23", "dif": 0.02, "dea": 0.08, "macd": -0.12},
+                    "kdj": {"time": "2026/06/23", "k": 41.0, "d": 44.0, "j": 35.0},
+                },
+                "crosses": {"macd": [], "kdj": []},
+            },
+        },
+        "K_30M": {"data_range": {"start": "2026/06/01 09:30", "end": "2026/06/23 14:30"}},
+    }
+    with patch("cli.PortfolioStore") as mock_store, patch("cli._portfolio_analysis_levels", return_value=(levels, 43.07)):
+        mock_store.return_value.list_positions.return_value = positions
+
+        result = runner.invoke(app, ["portfolio", "analyze", "--cache-path", str(tmp_path / "cache.sqlite3")])
+
+    assert result.exit_code == 0, result.output
+    assert "详细报告：" in result.output
+    assert "最近买卖点：" in result.output
+    assert "结构：" in result.output
+
+
 def test_portfolio_analyze_wraps_multiple_stocks_in_one_baostock_session(tmp_path):
     sessions = []
     positions = [
@@ -423,3 +456,20 @@ def test_portfolio_analysis_calculates_each_level_independently(tmp_path):
     assert mock_chan.call_count == len(PORTFOLIO_LEVELS)
     assert [call.kwargs["lv_list"] for call in mock_chan.call_args_list] == [[level] for level in PORTFOLIO_LEVELS]
     assert KL_TYPE.K_5M not in PORTFOLIO_LEVELS
+
+
+def test_portfolio_analysis_skips_weekly_kdj_calculation(tmp_path):
+    fake_bar = MagicMock(close=43.07)
+    fake_cache = MagicMock()
+    fake_cache.get_kl_data.return_value = iter([fake_bar])
+    document = {"levels": {level.name: {"buy_sell_points": []} for level in PORTFOLIO_LEVELS}}
+    with patch("cli.CCache", return_value=fake_cache), patch("cli.CChan") as mock_chan, patch("cli.build_document", return_value=document):
+        _portfolio_analysis_levels("002536", tmp_path / "cache.sqlite3", refresh=False)
+
+    config_by_level = {
+        call.kwargs["lv_list"][0]: call.kwargs["config"]
+        for call in mock_chan.call_args_list
+    }
+    assert config_by_level[KL_TYPE.K_WEEK].cal_kdj is False
+    assert config_by_level[KL_TYPE.K_DAY].cal_kdj is True
+    assert config_by_level[KL_TYPE.K_30M].cal_kdj is True

@@ -13,7 +13,7 @@ from Chan import CChan
 from ChanConfig import CChanConfig
 from App.analysis_export import build_document
 from App.analysis_summary import format_summary
-from App.portfolio_analysis import build_advice
+from App.portfolio_analysis import build_observation
 from App.portfolio_store import PortfolioStore
 from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
 from DataAPI.BaoStockAPI import CBaoStock
@@ -73,7 +73,7 @@ def _begin_time(levels: list[KL_TYPE], start: Optional[str], today: date) -> dic
     }
 
 
-def _default_chan_config():
+def _default_chan_config(cal_kdj=False):
     return CChanConfig({
         "bi_strict": True,
         "trigger_step": False,
@@ -87,6 +87,7 @@ def _default_chan_config():
         "bs_type": '1,2,3a,1p,2s,3b',
         "print_warning": True,
         "zs_algo": "normal",
+        "cal_kdj": cal_kdj,
     })
 
 
@@ -323,9 +324,12 @@ def portfolio_analyze(
             typer.echo(f"\n{title}")
             for position in selected:
                 levels, latest_price = _portfolio_analysis_levels(position["symbol"], cache_path, refresh)
-                advice = build_advice(position, levels, latest_price)
-                typer.echo(f"{position['name']} ({position['symbol']})：{advice['priority']}")
-                typer.echo(f"  {advice['basis']}")
+                observation = build_observation(position, levels, latest_price)
+                typer.echo(observation["header"])
+                for line in observation["levels"]:
+                    typer.echo(f"  {line}")
+                for line in observation["details"]:
+                    typer.echo(f"  {line}")
 
 
 def _normalize_portfolio_code(code):
@@ -354,7 +358,7 @@ def _portfolio_analysis_levels(code, cache_path, refresh):
             end_time=None,
             data_src=DATA_SRC.CACHE,
             lv_list=[level],
-            config=_default_chan_config(),
+            config=_default_chan_config(cal_kdj=level != KL_TYPE.K_WEEK),
             autype=AUTYPE.QFQ,
         )
         levels[level.name] = build_document(code, "cache", {level: chan[level]})["levels"][level.name]

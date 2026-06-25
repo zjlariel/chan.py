@@ -8,6 +8,7 @@ def serialize_level(kl_list):
             "start": _time(klus[0]) if klus else None,
             "end": _time(klus[-1]) if klus else None,
         },
+        "indicators": _serialize_indicators(klus),
         "bi": [_serialize_bi(bi) for bi in _sort_by_begin_time(kl_list.bi_list, lambda bi: bi.get_begin_klu())],
         "segments": [_serialize_segment(segment) for segment in _sort_by_begin_time(kl_list.seg_list, lambda segment: segment.start_bi.get_begin_klu())],
         "seg_segments": [_serialize_segment(segment) for segment in _sort_by_begin_time(kl_list.segseg_list, lambda segment: segment.start_bi.get_begin_klu())],
@@ -77,6 +78,72 @@ def _serialize_bsp(bsp):
         "type": bsp.type2str(),
         "bi_idx": bsp.bi.idx,
         "is_segment_point": bsp.is_segbsp,
+    }
+
+
+def _serialize_indicators(klus):
+    latest_macd = _latest_indicator(klus, "macd", _serialize_macd)
+    latest_kdj = _latest_indicator(klus, "kdj", _serialize_kdj)
+    return {
+        "latest": {
+            "macd": latest_macd,
+            "kdj": latest_kdj,
+        },
+        "crosses": {
+            "macd": _serialize_crosses(klus, "macd", _macd_relation, _serialize_macd),
+            "kdj": _serialize_crosses(klus, "kdj", _kdj_relation, _serialize_kdj),
+        },
+    }
+
+
+def _latest_indicator(klus, attr, serializer):
+    for klu in reversed(klus):
+        indicator = getattr(klu, attr, None)
+        if indicator is not None:
+            return serializer(klu, indicator)
+    return None
+
+
+def _serialize_crosses(klus, attr, relation_func, serializer):
+    crosses = []
+    previous_relation = None
+    for klu in klus:
+        indicator = getattr(klu, attr, None)
+        if indicator is None:
+            continue
+        relation = relation_func(indicator)
+        if previous_relation is not None:
+            if previous_relation <= 0 < relation:
+                crosses.append({"type": "golden", **serializer(klu, indicator)})
+            elif previous_relation >= 0 > relation:
+                crosses.append({"type": "dead", **serializer(klu, indicator)})
+        previous_relation = relation
+    return crosses
+
+
+def _macd_relation(macd):
+    return macd.DIF - macd.DEA
+
+
+def _kdj_relation(kdj):
+    return kdj.k - kdj.d
+
+
+def _serialize_macd(klu, macd):
+    return {
+        "time": _time(klu),
+        "dif": macd.DIF,
+        "dea": macd.DEA,
+        "macd": macd.macd,
+    }
+
+
+def _serialize_kdj(klu, kdj):
+    return {
+        "time": _time(klu),
+        "k": kdj.k,
+        "d": kdj.d,
+        "j": kdj.j,
     }
 
 
