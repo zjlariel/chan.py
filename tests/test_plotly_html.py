@@ -25,6 +25,43 @@ def test_plotly_driver_uses_sparse_auto_x_ticks():
     assert driver.figure.layout.xaxis.nticks == 8
 
 
+def test_plotly_driver_uses_a_share_candlestick_colors():
+    chan = MagicMock()
+    chan.code = "sz.000001"
+    chan.__getitem__.return_value = MagicMock()
+
+    up_klu = MagicMock()
+    up_klu.time.to_str.return_value = "2026/06/25"
+    up_klu.open = 10.0
+    up_klu.high = 11.0
+    up_klu.low = 9.8
+    up_klu.close = 10.8
+
+    down_klu = MagicMock()
+    down_klu.time.to_str.return_value = "2026/06/26"
+    down_klu.open = 10.8
+    down_klu.high = 11.0
+    down_klu.low = 10.0
+    down_klu.close = 10.2
+
+    meta = MagicMock()
+    meta.datetick = ["2026/06/25", "2026/06/26"]
+    meta.klu_iter.return_value = iter([up_klu, down_klu])
+    meta.bi_list = []
+    meta.seg_list = []
+    meta.zs_lst = []
+    meta.bs_point_lst = []
+
+    with patch("Plot.PlotlyDriver.CChanPlotMeta", return_value=meta):
+        driver = CPlotlyDriver(chan, KL_TYPE.K_DAY)
+
+    kline = driver.figure.data[0]
+    assert kline.increasing.line.color == "red"
+    assert kline.increasing.fillcolor == "red"
+    assert kline.decreasing.line.color == "green"
+    assert kline.decreasing.fillcolor == "green"
+
+
 def test_plotly_driver_writes_single_html_with_independent_level_divs(tmp_path):
     day_driver = CPlotlyDriver.__new__(CPlotlyDriver)
     day_driver.level = KL_TYPE.K_DAY

@@ -68,6 +68,8 @@ class CPlotlyDriver:
             high=[klu.high for klu in klu_list],
             low=[klu.low for klu in klu_list],
             close=[klu.close for klu in klu_list],
+            increasing={"line": {"color": "red"}, "fillcolor": "red"},
+            decreasing={"line": {"color": "green"}, "fillcolor": "green"},
             name="K线",
         ))
 
