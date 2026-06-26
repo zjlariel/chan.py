@@ -101,6 +101,65 @@ def test_analyze_figure_option_generates_images():
     assert mock_plot.call_count == 4
 
 
+def test_analyze_html_option_generates_one_independent_plotly_html(tmp_path):
+    with patch("cli.CChan") as mock_chan, patch("cli.CCache") as mock_cache, patch("cli.CPlotlyDriver") as mock_plotly:
+        mock_chan.return_value = MagicMock()
+        mock_cache.return_value.get_kl_data.return_value = iter(())
+        mock_plotly.return_value = MagicMock()
+
+        result = runner.invoke(app, ["analyze", "--html", "--output-dir", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert mock_plotly.call_count == 3
+    assert [call.args[1] for call in mock_plotly.call_args_list] == [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
+    mock_plotly.return_value.save2html.assert_called_once()
+    save_args = mock_plotly.return_value.save2html.call_args
+    assert save_args.args[0] == str(tmp_path / "sz.000001_analysis.html")
+    assert save_args.kwargs["code"] == "sz.000001"
+    assert len(save_args.kwargs["drivers"]) == 3
+
+
+def test_analyze_html_with_non_cache_source_uses_loaded_day_30m_5m_levels(tmp_path):
+    with patch("cli.CChan") as mock_chan, patch("cli.CPlotlyDriver") as mock_plotly:
+        mock_chan.return_value = MagicMock()
+        mock_plotly.return_value = MagicMock()
+
+        result = runner.invoke(app, ["analyze", "--data-src", "sina", "--html", "--output-dir", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert mock_chan.call_args.kwargs["lv_list"] == DEFAULT_LEVELS
+    assert [call.args[1] for call in mock_plotly.call_args_list] == [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
+
+
+def test_analyze_cache_refreshes_each_level_before_loading_cached_data():
+    calls = []
+
+    class FakeCache:
+        def __init__(self, code, k_type, begin_date=None, end_date=None, autype=None, **kwargs):
+            self.code = code
+            self.k_type = k_type
+
+        def refresh(self):
+            calls.append(("refresh", self.k_type))
+
+        def get_kl_data(self):
+            calls.append(("load", self.k_type))
+            return iter(())
+
+    with patch("cli.CCache", FakeCache), patch("cli.CChan") as mock_chan:
+        mock_chan.return_value = MagicMock()
+
+        result = runner.invoke(app, ["analyze", "--kl-type", "K_DAY,K_30M"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        ("refresh", KL_TYPE.K_DAY),
+        ("load", KL_TYPE.K_DAY),
+        ("refresh", KL_TYPE.K_30M),
+        ("load", KL_TYPE.K_30M),
+    ]
+
+
 def test_analyze_rejects_unknown_data_source():
     result = runner.invoke(app, ["analyze", "--data-src", "unknown"])
     assert result.exit_code != 0

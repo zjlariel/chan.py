@@ -21,10 +21,12 @@ from DataAPI.CacheAPI import CCache
 from DataAPI.CacheStore import CacheStore
 from Plot.AnimatePlotDriver import CAnimateDriver
 from Plot.PlotDriver import CPlotDriver
+from Plot.PlotlyDriver import CPlotlyDriver
 
 app = typer.Typer(help="缠论命令行工具")
 
 DEFAULT_LEVELS = [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
+DEFAULT_HTML_LEVELS = [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
 PORTFOLIO_LEVELS = [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_30M]
 DEFAULT_LOOKBACK_DAYS = {
     KL_TYPE.K_WEEK: 2400,
@@ -130,6 +132,7 @@ def analyze(
     output_dir: Annotated[Path, typer.Option("--output-dir", help="图片输出目录")] = Path("output"),
     json_output: Annotated[bool, typer.Option("--json", help="导出格式化的缠论计算结果 JSON")] = False,
     figure: Annotated[bool, typer.Option("--figure", help="生成分析图片")] = False,
+    html: Annotated[bool, typer.Option("--html", help="生成日线、30分钟线、5分钟线的 Plotly HTML 图表")] = False,
 ):
     if data_src not in DATA_SOURCE_MAP:
         raise typer.BadParameter(f"未知数据源：{data_src}")
@@ -141,9 +144,11 @@ def analyze(
 
     config = _default_chan_config()
     analysis_results = {}
+    html_drivers = []
     if data_src == "cache":
         for level in levels:
             cache = CCache(code, level, begin_time[level], end_date, AUTYPE.QFQ, mode="eod")
+            cache.refresh()
             list(cache.get_kl_data())
     analysis_level_sets = [[level] for level in levels] if data_src == "cache" else [levels]
     for analysis_levels in analysis_level_sets:
@@ -160,6 +165,11 @@ def analyze(
         for level in analysis_levels:
             analysis_results[level] = chan[level]
 
+        if html:
+            for html_level in analysis_levels:
+                if html_level in DEFAULT_HTML_LEVELS:
+                    html_drivers.append(CPlotlyDriver(chan, html_level))
+
         if figure and not config.trigger_step:
             plot_driver = CPlotDriver(
                 chan,
@@ -175,6 +185,10 @@ def analyze(
                 plot_config=_default_plot_config(),
                 plot_para=_default_plot_para(),
             )
+
+    if html and html_drivers:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        html_drivers[0].save2html(str(output_dir / f"{code}_analysis.html"), drivers=html_drivers, code=code)
 
     if json_output:
         output_dir.mkdir(parents=True, exist_ok=True)
