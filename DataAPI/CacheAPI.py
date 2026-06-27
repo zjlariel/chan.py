@@ -92,6 +92,7 @@ class CCache(CCommonStockApi):
         provider = provider_class(
             self._provider_code(provider_name), self.k_type, begin_date, end_date, self.autype
         )
+        self._remember_stock_name(provider, provider_name)
         bars = list(provider.get_kl_data())
         if bars:
             written = self.store.upsert_bars(self.symbol, self.k_type, bars, provider_name)
@@ -161,6 +162,12 @@ class CCache(CCommonStockApi):
         from DataAPI.BaoStockAPI import CBaoStock
 
         return {"sina": CSina, "baostock": CBaoStock}
+
+    def _remember_stock_name(self, provider, provider_name):
+        name = getattr(provider, "name", None)
+        if not name or name in {getattr(provider, "code", None), self.symbol}:
+            return
+        self.store.upsert_stock_name(self.symbol, name, provider_name)
 
     def SetBasciInfo(self):
         self.name = self.code

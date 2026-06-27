@@ -6,7 +6,8 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from Common.CEnum import DATA_SRC, KL_TYPE
-from cli import DEFAULT_LEVELS, PORTFOLIO_LEVELS, _portfolio_analysis_levels, app
+from cli import DEFAULT_LEVELS, PORTFOLIO_LEVELS, _portfolio_analysis_levels, _stock_output_stem, app
+from DataAPI.CacheStore import CacheStore
 
 runner = CliRunner()
 
@@ -74,7 +75,13 @@ def test_analyze_accepts_sina_and_custom_levels():
 
 
 def test_analyze_json_writes_results_without_generating_figures(tmp_path):
-    with patch("cli.CChan") as mock_chan, patch("cli.CCache") as mock_cache, patch("cli.CPlotDriver") as mock_plot, patch("cli.build_document") as mock_document:
+    with (
+        patch("cli.CChan") as mock_chan,
+        patch("cli.CCache") as mock_cache,
+        patch("cli.CPlotDriver") as mock_plot,
+        patch("cli.build_document") as mock_document,
+        patch("cli._stock_output_stem", return_value="\u5e73\u5b89\u94f6\u884c"),
+    ):
         mock_chan.return_value = MagicMock()
         mock_cache.return_value.get_kl_data.return_value = iter(())
         mock_document.return_value = {"code": "sz.000001", "levels": {}}
@@ -86,7 +93,7 @@ def test_analyze_json_writes_results_without_generating_figures(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert not mock_plot.called
-    assert (tmp_path / "sz.000001_analysis.json").read_text(encoding="utf-8") == '{\n  "code": "sz.000001",\n  "levels": {}\n}'
+    assert (tmp_path / "\u5e73\u5b89\u94f6\u884c_analysis.json").read_text(encoding="utf-8") == '{\n  "code": "sz.000001",\n  "levels": {}\n}'
 
 
 def test_analyze_figure_option_generates_images():
@@ -102,7 +109,12 @@ def test_analyze_figure_option_generates_images():
 
 
 def test_analyze_html_option_generates_one_independent_plotly_html(tmp_path):
-    with patch("cli.CChan") as mock_chan, patch("cli.CCache") as mock_cache, patch("cli.CPlotlyDriver") as mock_plotly:
+    with (
+        patch("cli.CChan") as mock_chan,
+        patch("cli.CCache") as mock_cache,
+        patch("cli.CPlotlyDriver") as mock_plotly,
+        patch("cli._stock_output_stem", return_value="\u5e73\u5b89\u94f6\u884c"),
+    ):
         mock_chan.return_value = MagicMock()
         mock_cache.return_value.get_kl_data.return_value = iter(())
         mock_plotly.return_value = MagicMock()
@@ -114,7 +126,7 @@ def test_analyze_html_option_generates_one_independent_plotly_html(tmp_path):
     assert [call.args[1] for call in mock_plotly.call_args_list] == [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
     mock_plotly.return_value.save2html.assert_called_once()
     save_args = mock_plotly.return_value.save2html.call_args
-    assert save_args.args[0] == str(tmp_path / "sz.000001_analysis.html")
+    assert save_args.args[0] == str(tmp_path / "\u5e73\u5b89\u94f6\u884c_analysis.html")
     assert save_args.kwargs["code"] == "sz.000001"
     assert len(save_args.kwargs["drivers"]) == 3
 
@@ -129,6 +141,13 @@ def test_analyze_html_with_non_cache_source_uses_loaded_day_30m_5m_levels(tmp_pa
     assert result.exit_code == 0, result.output
     assert mock_chan.call_args.kwargs["lv_list"] == DEFAULT_LEVELS
     assert [call.args[1] for call in mock_plotly.call_args_list] == [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
+
+
+def test_stock_output_stem_prefers_cached_chinese_name_and_sanitizes_it(tmp_path):
+    cache_path = tmp_path / "cache.sqlite3"
+    CacheStore(cache_path).upsert_stock_name("sz000001", "\u5e73\u5b89/\u94f6\u884c", "baostock")
+
+    assert _stock_output_stem("sz.000001", cache_path) == "\u5e73\u5b89_\u94f6\u884c"
 
 
 def test_analyze_cache_refreshes_each_level_before_loading_cached_data():

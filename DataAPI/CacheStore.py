@@ -38,6 +38,12 @@ class CacheStore:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (symbol, k_type, start_date, end_date, source)
                 );
+                CREATE TABLE IF NOT EXISTS stock_metadata (
+                    symbol TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
 
@@ -157,6 +163,31 @@ class CacheStore:
                 (symbol, k_type.name, begin_date[:10], end_date[:10]),
             ).fetchone()
         return row is not None
+
+    def upsert_stock_name(self, symbol, name, source):
+        name = str(name).strip()
+        if not name:
+            return
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO stock_metadata (symbol, name, source, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    name = excluded.name,
+                    source = excluded.source,
+                    updated_at = excluded.updated_at
+                """,
+                (symbol, name, source, self._now()),
+            )
+
+    def stock_name(self, symbol):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT name FROM stock_metadata WHERE symbol = ?",
+                (symbol,),
+            ).fetchone()
+        return row["name"] if row else None
 
     def status(self):
         with self._connect() as connection:

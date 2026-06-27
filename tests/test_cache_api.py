@@ -35,6 +35,7 @@ class FakeSina:
 
 class FakeBao(FakeSina):
     calls = []
+    name = "\u6d66\u53d1\u94f6\u884c"
 
 
 def build_api(tmp_path: Path, k_type, now):
@@ -81,6 +82,24 @@ def test_end_of_day_cache_miss_fetches_baostock(tmp_path):
 
     assert FakeBao.calls[0][:4] == ("sh.600000", KL_TYPE.K_5M, "2026-06-18", "2026-06-18")
     assert FakeSina.calls == []
+
+
+def test_refresh_persists_provider_stock_name(tmp_path):
+    api = CCache(
+        "600000",
+        KL_TYPE.K_DAY,
+        "2026-06-18",
+        "2026-06-18",
+        AUTYPE.QFQ,
+        cache_path=tmp_path / "cache.sqlite3",
+        now=datetime(2026, 6, 18, 19, 0),
+        provider_classes={"sina": FakeSina, "baostock": FakeBao},
+        mode="eod",
+    )
+
+    api.refresh()
+
+    assert api.store.stock_name("sh600000") == "\u6d66\u53d1\u94f6\u884c"
 
 
 def test_end_of_day_cache_uses_qfq_when_autype_is_omitted(tmp_path):

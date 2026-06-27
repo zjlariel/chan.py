@@ -1,6 +1,8 @@
 """Unified command-line entry point for chan.py."""
 
 import json
+import re
+import sqlite3
 
 from datetime import date, timedelta
 from pathlib import Path
@@ -45,6 +47,7 @@ DATA_SOURCE_MAP = {
 LIVE_TYPES = [KL_TYPE.K_1M, KL_TYPE.K_5M, KL_TYPE.K_15M, KL_TYPE.K_30M, KL_TYPE.K_60M]
 EOD_TYPES = [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_60M, KL_TYPE.K_30M, KL_TYPE.K_15M, KL_TYPE.K_5M]
 AUTO_TYPES = EOD_TYPES + [KL_TYPE.K_1M]
+INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 def _parse_levels(value: str) -> list[KL_TYPE]:
@@ -73,6 +76,49 @@ def _begin_time(levels: list[KL_TYPE], start: Optional[str], today: date) -> dic
         level: (today - timedelta(days=DEFAULT_LOOKBACK_DAYS[level])).isoformat() if level in DEFAULT_LOOKBACK_DAYS else None
         for level in levels
     }
+
+
+def _stock_output_stem(code, cache_path=CCache.DEFAULT_PATH):
+    name = _cached_stock_name(code, cache_path) or _tracked_stock_name(code, cache_path)
+    return _safe_filename_stem(name or code)
+
+
+def _cached_stock_name(code, cache_path):
+    path = Path(cache_path)
+    if not path.exists():
+        return None
+    return CacheStore(path).stock_name(_cache_symbol(code))
+
+
+def _tracked_stock_name(code, cache_path):
+    path = Path(cache_path)
+    if not path.exists():
+        return None
+    try:
+        with sqlite3.connect(path) as connection:
+            row = connection.execute(
+                "SELECT name FROM tracked_stocks WHERE symbol = ? AND active = 1",
+                (_normalize_portfolio_code(code),),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    return row[0] if row else None
+
+
+def _cache_symbol(code):
+    normalized = str(code).lower().replace(".", "")
+    exchange = normalized[:2] if normalized[:2] in {"sh", "sz"} else ""
+    digits = normalized[2:] if exchange else normalized
+    if len(digits) == 6 and digits.isdigit():
+        exchange = exchange or ("sh" if digits.startswith("6") else "sz")
+        return f"{exchange}{digits}"
+    return normalized
+
+
+def _safe_filename_stem(value):
+    stem = INVALID_FILENAME_CHARS.sub("_", str(value).strip())
+    stem = re.sub(r"\s+", "_", stem).strip(" ._")
+    return stem or "stock"
 
 
 def _default_chan_config(cal_kdj=False):
@@ -150,6 +196,7 @@ def analyze(
             cache = CCache(code, level, begin_time[level], end_date, AUTYPE.QFQ, mode="eod")
             cache.refresh()
             list(cache.get_kl_data())
+    output_stem = _stock_output_stem(code)
     analysis_level_sets = [[level] for level in levels] if data_src == "cache" else [levels]
     for analysis_levels in analysis_level_sets:
         analysis_begin_time = {level: begin_time[level] for level in analysis_levels}
@@ -178,7 +225,7 @@ def analyze(
             )
             output_dir.mkdir(parents=True, exist_ok=True)
             suffix = f"_{analysis_levels[0].name}" if data_src == "cache" else ""
-            plot_driver.save2img(str(output_dir / f"{code}{suffix}.png"))
+            plot_driver.save2img(str(output_dir / f"{output_stem}{suffix}.png"))
         elif figure:
             CAnimateDriver(
                 chan,
@@ -188,11 +235,11 @@ def analyze(
 
     if html and html_drivers:
         output_dir.mkdir(parents=True, exist_ok=True)
-        html_drivers[0].save2html(str(output_dir / f"{code}_analysis.html"), drivers=html_drivers, code=code)
+        html_drivers[0].save2html(str(output_dir / f"{output_stem}_analysis.html"), drivers=html_drivers, code=code)
 
     if json_output:
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"{code}_analysis.json"
+        output_path = output_dir / f"{output_stem}_analysis.json"
         output_path.write_text(
             json.dumps(build_document(code, data_src, analysis_results), ensure_ascii=False, indent=2),
             encoding="utf-8",

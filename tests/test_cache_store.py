@@ -58,3 +58,11 @@ def test_prunes_old_bars_and_reports_latest_timestamp(tmp_path: Path):
 
     assert deleted == 1
     assert store.latest_timestamp("sh600000", KL_TYPE.K_5M) == "2026-06-18 09:30"
+
+
+def test_saves_and_reads_stock_name(tmp_path: Path):
+    store = CacheStore(tmp_path / "cache.sqlite3")
+
+    store.upsert_stock_name("sz000001", "\u5e73\u5b89\u94f6\u884c", "baostock")
+
+    assert store.stock_name("sz000001") == "\u5e73\u5b89\u94f6\u884c"
