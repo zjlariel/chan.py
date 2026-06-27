@@ -394,6 +394,31 @@ def test_portfolio_init_and_set_manage_one_tracked_stock_table(tmp_path):
     assert "观察" in listed.output
 
 
+def test_portfolio_delete_hides_tracked_stock_from_list(tmp_path):
+    cache_file = tmp_path / "cache.sqlite3"
+
+    created = runner.invoke(
+        app,
+        ["portfolio", "set", "--code", "000001", "--name", "平安银行", "--quantity", "0", "--cache-path", str(cache_file)],
+    )
+    deleted = runner.invoke(app, ["portfolio", "delete", "--code", "000001", "--cache-path", str(cache_file)])
+    listed = runner.invoke(app, ["portfolio", "list", "--cache-path", str(cache_file)])
+
+    assert created.exit_code == 0, created.output
+    assert deleted.exit_code == 0, deleted.output
+    assert "已删除 000001" in deleted.output
+    assert "平安银行" not in listed.output
+
+
+def test_portfolio_delete_reports_missing_stock(tmp_path):
+    cache_file = tmp_path / "cache.sqlite3"
+
+    result = runner.invoke(app, ["portfolio", "delete", "--code", "000001", "--cache-path", str(cache_file)])
+
+    assert result.exit_code != 0
+    assert "未找到跟踪股票：000001" in result.output
+
+
 def test_portfolio_analyze_outputs_holding_and_watch_sections(tmp_path):
     positions = [
         {"symbol": "002536", "name": "飞龙股份", "quantity": 400, "cost_price": 41.343, "status": "holding"},

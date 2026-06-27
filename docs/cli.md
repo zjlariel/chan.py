@@ -124,10 +124,13 @@ chanpy portfolio init
 chanpy portfolio list
 chanpy portfolio set --code 000001 --name 平安银行 --quantity 0
 chanpy portfolio set --code 002536 --name 飞龙股份 --quantity 400 --available 400 --cost-price 41.343
+chanpy portfolio delete --code 002460
 chanpy portfolio analyze
 chanpy portfolio analyze --refresh
 chanpy portfolio analyze --code 002050 --refresh
 ```
+
+`portfolio delete --code <代码>` 会把股票从当前股票池中移除；这是软删除，只会将 `tracked_stocks.active` 标记为 `0`，不会物理删除历史记录、成本价、备注等信息。删除后该股票不会出现在 `portfolio list`、`portfolio analyze` 和 `cache update --all` 的启用股票范围内。后续可再次使用 `portfolio set` 重新加入。
 
 `portfolio analyze` 使用周线作为趋势背景、日线作为决策级别、30 分钟作为确认级别；不使用 5 分钟信号。持仓股同时显示卖点风险和加仓候选，观察股显示买点与关注优先级。它是规则化技术分析提示，不会自动执行交易。
 

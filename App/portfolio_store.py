@@ -90,6 +90,21 @@ class PortfolioStore:
             rows = connection.execute(query).fetchall()
         return [self._row_to_position(row) for row in rows]
 
+    def delete_position(self, symbol):
+        self.initialize()
+        symbol = self._normalize_symbol(symbol)
+        now = self._now()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE tracked_stocks
+                SET active = 0, updated_at = ?
+                WHERE symbol = ? AND active = 1
+                """,
+                (now, symbol),
+            )
+        return cursor.rowcount > 0
+
     def _connect(self):
         connection = sqlite3.connect(self.path)
         connection.row_factory = sqlite3.Row

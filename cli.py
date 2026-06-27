@@ -287,6 +287,19 @@ def portfolio_set(
     typer.echo(f"已更新 {code}")
 
 
+@portfolio_app.command(name="delete", help="从股票池删除跟踪股票")
+def portfolio_delete(
+    code: Annotated[str, typer.Option("--code", help="A 股代码")],
+    cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
+):
+    store = PortfolioStore(cache_path)
+    normalized_code = _normalize_portfolio_code(code)
+    if not store.delete_position(normalized_code):
+        typer.echo(f"未找到跟踪股票：{normalized_code}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"已删除 {normalized_code}")
+
+
 @portfolio_app.command(name="list", help="列出持仓与观察股")
 def portfolio_list(
     cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
