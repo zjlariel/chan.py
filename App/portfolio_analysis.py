@@ -1,3 +1,6 @@
+from datetime import datetime
+
+
 LEVEL_LABELS = {
     "K_WEEK": "周线",
     "K_DAY": "日线",
@@ -138,6 +141,7 @@ def _detail_lines(levels, limit=5):
     lines = ["详细报告："]
     weekly = levels.get("K_WEEK")
     lines.extend(_weekly_detail_lines(weekly))
+    lines.extend(_level_linkage_lines(levels.get("K_DAY"), levels.get("K_30M")))
     for level in ("K_DAY", "K_30M"):
         lines.extend(_decision_level_detail_lines(level, levels.get(level), limit))
     return lines
@@ -173,6 +177,10 @@ def _decision_level_detail_lines(level, data, limit):
     crosses = indicators.get("crosses") or {}
     lines.append(f"    数据：{_range_text(data_range.get('start'), data_range.get('end'))}")
     lines.append(f"    最新指标：MACD {_macd_text(latest.get('macd'))}；KDJ {_kdj_text(latest.get('kdj'))}")
+    lines.append(f"    趋势过滤：{_ma_text(latest.get('ma'))}")
+    lines.append(f"    动量确认：MACD {_macd_text(latest.get('macd'))}；KDJ {_kdj_text(latest.get('kdj'))}；RSI14 {_rsi_text(latest.get('rsi'))}")
+    lines.append(f"    波动位置：{_boll_text(latest.get('boll'))}")
+    lines.append(f"    量能确认：{_volume_text(latest.get('volume'))}")
     lines.extend(_list_detail_lines("最近买卖点", _recent_buy_sell_points(data.get("buy_sell_points") or [], limit)))
     lines.extend(_list_detail_lines("最近 MACD 交叉", _recent_crosses(crosses.get("macd") or [], limit)))
     lines.extend(_list_detail_lines("最近 KDJ 交叉", _recent_crosses(crosses.get("kdj") or [], limit)))
@@ -215,6 +223,157 @@ def _structure_detail_lines(data):
     return ["    结构：", *items]
 
 
+def _level_linkage_lines(day_data, m30_data):
+    lines = ["  级别联动："]
+    lines.append(f"    日线结构：{_daily_construction_text(day_data)}")
+    day_state = _point_state(day_data, "日线", current_days=10, weak_days=20)
+    m30_state = _point_state(m30_data, "30分钟", current_days=3, weak_days=5)
+    lines.append(f"    日线买点新鲜度：{_point_state_text(day_state)}")
+    lines.append(f"    30分钟确认：{_m30_confirmation_text(m30_state)}")
+    lines.append(f"    联动标签：{_linkage_label(day_state, m30_state)}")
+    return lines
+
+
+def _daily_construction_text(data):
+    if not data:
+        return "无数据"
+    structure = _latest_structure(data.get("segments") or [])
+    name = "线段"
+    if not structure:
+        structure = _latest_structure(data.get("bi") or [])
+        name = "笔"
+    if not structure:
+        return "无结构"
+    sure_text = "已确认" if structure.get("is_sure", True) else "未确认"
+    direction = TREND_LABELS.get(structure.get("direction"), structure.get("direction", "未知"))
+    begin = structure.get("begin_time")
+    end = structure.get("end_time")
+    time_text = f"（{_range_text(begin, end)}）" if begin or end else ""
+    return f"最新{name}{sure_text}，方向{direction}{time_text}"
+
+
+def _point_state(data, level_name, current_days, weak_days):
+    if not data:
+        return {"status": "no_data", "level": level_name}
+
+    points = data.get("buy_sell_points") or []
+    latest_point = _latest_point(points)
+    latest_buy = _latest_point([point for point in points if point.get("is_buy")])
+    end_time = (data.get("data_range") or {}).get("end")
+    age_days = _days_between(latest_buy.get("time") if latest_buy else None, end_time)
+
+    if latest_buy is None:
+        return {"status": "no_buy", "level": level_name, "latest_point": latest_point}
+    if latest_point and not latest_point.get("is_buy") and latest_point.get("time") > latest_buy.get("time"):
+        return {
+            "status": "invalidated",
+            "level": level_name,
+            "point": latest_buy,
+            "latest_point": latest_point,
+            "age_days": age_days,
+        }
+    if age_days is None:
+        freshness = "unknown"
+    elif age_days <= current_days:
+        freshness = "current"
+    elif age_days <= weak_days:
+        freshness = "weak"
+    else:
+        freshness = "old"
+    return {
+        "status": "buy",
+        "level": level_name,
+        "point": latest_buy,
+        "latest_point": latest_point,
+        "age_days": age_days,
+        "freshness": freshness,
+    }
+
+
+def _latest_point(points):
+    if not points:
+        return None
+    return max(points, key=lambda item: item["time"])
+
+
+def _point_state_text(state):
+    status = state.get("status")
+    if status == "no_data":
+        return "无数据"
+    if status == "no_buy":
+        return "无最新买点"
+    if status == "invalidated":
+        point = state["point"]
+        latest = state["latest_point"]
+        return (
+            f"买 {point['type']}（{point['time']}），已被后续"
+            f"{'买' if latest['is_buy'] else '卖'} {latest['type']}（{latest['time']}）覆盖"
+        )
+    if status != "buy":
+        return "无"
+    return f"{_point_text(state['point'])}，距最新{state['level']} {_age_text(state.get('age_days'))}，{_freshness_text(state.get('freshness'))}"
+
+
+def _m30_confirmation_text(state):
+    if state.get("status") != "buy":
+        return _point_state_text(state)
+    return f"{_point_text(state['point'])}，距最新{state['level']} {_age_text(state.get('age_days'))}，{_freshness_text(state.get('freshness'))}"
+
+
+def _linkage_label(day_state, m30_state):
+    day_status = day_state.get("status")
+    m30_is_current_buy = m30_state.get("status") == "buy" and m30_state.get("freshness") == "current"
+    if day_status == "buy" and day_state.get("freshness") == "current" and m30_is_current_buy:
+        return "当前区间套候选"
+    if day_status == "buy" and day_state.get("freshness") == "current":
+        return "日线新买点待30分钟确认"
+    if day_status == "buy" and day_state.get("freshness") == "weak" and m30_is_current_buy:
+        return "弱区间套观察"
+    if day_status == "buy" and day_state.get("freshness") == "old" and m30_is_current_buy:
+        return "旧日线买点背景，小级别反弹"
+    if day_status == "invalidated" and m30_is_current_buy:
+        return "日线卖点后小级别反弹"
+    return "仅客观观察，未形成级别联动"
+
+
+def _point_text(point):
+    direction = "买" if point["is_buy"] else "卖"
+    return f"{direction} {point['type']}（{point['time']}）"
+
+
+def _age_text(age_days):
+    return "未知" if age_days is None else f"{age_days} 天"
+
+
+def _freshness_text(freshness):
+    return {
+        "current": "当前有效",
+        "weak": "弱关联",
+        "old": "过期背景",
+        "unknown": "时间未知",
+    }.get(freshness, "未知")
+
+
+def _days_between(start, end):
+    start_date = _parse_date(start)
+    end_date = _parse_date(end)
+    if start_date is None or end_date is None:
+        return None
+    return max((end_date - start_date).days, 0)
+
+
+def _parse_date(value):
+    if not value:
+        return None
+    normalized = value.split()[0]
+    for fmt in ("%Y/%m/%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(normalized, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def _structure_detail_text(item):
     direction = TREND_LABELS.get(item.get("direction"), item.get("direction", "未知"))
     begin = item.get("begin_time")
@@ -235,3 +394,75 @@ def _zs_detail_text(zs):
         f"{_range_text(zs.get('begin_time'), zs.get('end_time'))}，"
         f"区间 {zs['low']:.3f} - {zs['high']:.3f}，{sure_text}"
     )
+
+
+def _ma_text(ma):
+    if ma is None:
+        return "无"
+    items = [
+        f"MA5 {_optional_float(ma.get('ma5'))}",
+        f"MA10 {_optional_float(ma.get('ma10'))}",
+        f"MA20 {_optional_float(ma.get('ma20'))}",
+        f"MA60 {_optional_float(ma.get('ma60'))}",
+    ]
+    return f"{' / '.join(items)}（{ma['time']}），{_ma20_position_text(ma)}"
+
+
+def _ma20_position_text(ma):
+    ma5 = ma.get("ma5")
+    ma20 = ma.get("ma20")
+    if ma5 is None or ma20 is None:
+        return "MA20 位置无"
+    return "价格位于 MA20 上方" if ma5 >= ma20 else "价格位于 MA20 下方"
+
+
+def _rsi_text(rsi):
+    if rsi is None:
+        return "无"
+    return f"{rsi['rsi']:.2f}（{rsi['time']}）"
+
+
+def _boll_text(boll):
+    if boll is None:
+        return "无"
+    return (
+        f"BOLL MID {boll['mid']:.3f} / UP {boll['up']:.3f} / DOWN {boll['down']:.3f}（{boll['time']}），"
+        f"{_boll_position_text(boll.get('position'))}，带宽 {_percent_text(boll.get('band_width'))}"
+    )
+
+
+def _boll_position_text(position):
+    return {
+        "above_up": "上轨上方",
+        "upper_half": "上半区",
+        "lower_half": "下半区",
+        "below_down": "下轨下方",
+    }.get(position, "位置未知")
+
+
+def _volume_text(volume):
+    if volume is None:
+        return "无"
+    return (
+        f"成交量 {_optional_plain(volume.get('volume'))}，"
+        f"较5周期均量 {_ratio_text(volume.get('volume_ratio_ma5'))} 倍，"
+        f"较20周期均量 {_ratio_text(volume.get('volume_ratio_ma20'))} 倍（{volume['time']}）"
+    )
+
+
+def _optional_float(value):
+    return "无" if value is None else f"{value:.3f}"
+
+
+def _optional_plain(value):
+    if value is None:
+        return "无"
+    return str(int(value)) if float(value).is_integer() else f"{value:.3f}"
+
+
+def _ratio_text(value):
+    return "无" if value is None else f"{value:.2f}"
+
+
+def _percent_text(value):
+    return "无" if value is None else f"{value * 100:.2f}%"
