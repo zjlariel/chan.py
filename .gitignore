@@ -12,3 +12,4 @@ cos_config.yaml
 *.png
 /output/
 .chanpy/
+.pytest-tmp
