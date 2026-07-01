@@ -27,6 +27,53 @@ def build_observation(position, levels, latest_price):
     }
 
 
+def build_model_item(position, levels, latest_price):
+    day_state = _point_state(levels.get("K_DAY"), "日线", current_days=10, weak_days=20)
+    m30_state = _point_state(levels.get("K_30M"), "30分钟", current_days=3, weak_days=5)
+    return {
+        "symbol": position["symbol"],
+        "name": position["name"],
+        "status": position["status"],
+        "quantity": position.get("quantity"),
+        "available_quantity": position.get("available_quantity"),
+        "cost_price": position.get("cost_price"),
+        "latest_price": latest_price,
+        "weekly": _model_weekly(levels.get("K_WEEK")),
+        "daily": _model_decision_level(levels.get("K_DAY"), day_state),
+        "m30": _model_decision_level(levels.get("K_30M"), m30_state),
+        "linkage": {
+            "daily_structure": _daily_construction_text(levels.get("K_DAY")),
+            "daily_buy": _model_point_state(day_state),
+            "m30_confirmation": _model_point_state(m30_state),
+            "label": _linkage_label(day_state, m30_state),
+        },
+    }
+
+
+def format_portfolio_summary(items):
+    lines = ["股票池分析摘要"]
+    for section in _summary_sections(items):
+        lines.extend(_summary_status_lines(section, [item for item in items if item.get("section") == section]))
+    lines.append("")
+    lines.append("级别联动分组：")
+    labels = [
+        "当前区间套候选",
+        "日线新买点待30分钟确认",
+        "弱区间套观察",
+        "旧日线买点背景，小级别反弹",
+        "日线卖点后小级别反弹",
+        "仅客观观察，未形成级别联动",
+    ]
+    for label in labels:
+        grouped = [item for item in items if item["linkage"]["label"] == label]
+        if not grouped:
+            continue
+        lines.append(f"  {label}：")
+        for item in grouped:
+            lines.append(f"    - {_summary_item_text(item)}")
+    return "\n".join(lines) + "\n"
+
+
 def _header(position, latest_price):
     status = "持仓" if position["status"] == "holding" else "观察"
     parts = [f"{position['name']} ({position['symbol']})：{status}"]
@@ -34,6 +81,118 @@ def _header(position, latest_price):
     if price:
         parts.append(price)
     return "，".join(parts)
+
+
+def _model_weekly(data):
+    data_range = (data or {}).get("data_range") or {}
+    return {
+        "data_range": data_range,
+        "trend": _trend_text(data) if data else "无",
+    }
+
+
+def _model_decision_level(data, point_state):
+    if not data:
+        return {
+            "data_range": {},
+            "structure": "无数据",
+            "latest_point": None,
+            "buy_freshness": _model_point_state(point_state),
+            "indicators": _model_indicators({}),
+        }
+    latest_point = _latest_point(data.get("buy_sell_points") or [])
+    return {
+        "data_range": data.get("data_range") or {},
+        "structure": _daily_construction_text(data),
+        "latest_point": _model_point(latest_point),
+        "buy_freshness": _model_point_state(point_state),
+        "indicators": _model_indicators(data.get("indicators") or {}),
+    }
+
+
+def _model_indicators(indicators):
+    latest = indicators.get("latest") or {}
+    crosses = indicators.get("crosses") or {}
+    return {
+        "macd": latest.get("macd"),
+        "macd_text": _macd_text(latest.get("macd")),
+        "latest_macd_cross": _model_cross(_latest_point(crosses.get("macd") or [])),
+        "kdj": latest.get("kdj"),
+        "kdj_text": _kdj_text(latest.get("kdj")),
+        "latest_kdj_cross": _model_cross(_latest_point(crosses.get("kdj") or [])),
+        "ma": latest.get("ma"),
+        "ma_text": _ma_text(latest.get("ma")),
+        "boll": latest.get("boll"),
+        "boll_text": _boll_text(latest.get("boll")),
+        "rsi": latest.get("rsi"),
+        "rsi_text": _rsi_text(latest.get("rsi")),
+        "volume": latest.get("volume"),
+        "volume_text": _volume_text(latest.get("volume")),
+    }
+
+
+def _model_point(point):
+    if point is None:
+        return None
+    return {
+        "direction": "buy" if point["is_buy"] else "sell",
+        "type": point["type"],
+        "time": point["time"],
+        "text": _point_text(point),
+    }
+
+
+def _model_cross(cross):
+    if cross is None:
+        return None
+    return {
+        "type": cross["type"],
+        "time": cross["time"],
+        "text": f"{CROSS_LABELS[cross['type']]}（{cross['time']}）",
+    }
+
+
+def _model_point_state(state):
+    return {
+        "status": state.get("status"),
+        "freshness": state.get("freshness"),
+        "age_days": state.get("age_days"),
+        "point": _model_point(state.get("point")),
+        "latest_point": _model_point(state.get("latest_point")),
+        "text": _point_state_text(state),
+    }
+
+
+def _summary_status_lines(title, items):
+    lines = ["", f"{title}："]
+    if not items:
+        lines.append("  无")
+        return lines
+    for item in items:
+        lines.append(f"  - {_summary_item_text(item)}")
+    return lines
+
+
+def _summary_sections(items):
+    sections = []
+    for fallback in ("持仓股", "观察股", "临时观察股"):
+        if any(item.get("section") == fallback for item in items):
+            sections.append(fallback)
+    for item in items:
+        section = item.get("section")
+        if section and section not in sections:
+            sections.append(section)
+    return sections
+
+
+def _summary_item_text(item):
+    price = "无" if item.get("latest_price") is None else f"{item['latest_price']:.3f}"
+    return (
+        f"{item['name']}({item['symbol']}) 最新价 {price}；"
+        f"{item['linkage']['label']}；"
+        f"日线 {item['linkage']['daily_buy']['text']}；"
+        f"30分钟 {item['linkage']['m30_confirmation']['text']}"
+    )
 
 
 def _price_text(cost_price, latest_price):

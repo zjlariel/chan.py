@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from datetime import date, timedelta
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -283,6 +284,42 @@ def test_cache_update_all_updates_active_tracked_stocks(tmp_path):
     assert calls == [(code, k_type) for code in ["002536", "600549"] for k_type in ["K_WEEK", "K_DAY", "K_60M", "K_30M", "K_15M", "K_5M"]]
 
 
+def test_cache_update_all_etfs_updates_active_tracked_etfs(tmp_path):
+    calls = []
+
+    class FakeCache:
+        def __init__(self, code, k_type, **kwargs):
+            self.code = code
+            self.k_type = k_type
+
+        def refresh(self, full=False):
+            calls.append((self.code, self.k_type.name))
+            return {}
+
+    class FakeEtfStore:
+        def __init__(self, path):
+            self.path = path
+
+        def list_positions(self):
+            return [{"symbol": "513130"}, {"symbol": "159530"}]
+
+    with patch("cli.CCache", FakeCache), patch("cli.EtfStore", FakeEtfStore):
+        result = runner.invoke(app, ["cache", "update", "--all-etfs", "--mode", "eod", "--cache-path", str(tmp_path / "cache.sqlite3")])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [(code, k_type) for code in ["513130", "159530"] for k_type in ["K_WEEK", "K_DAY", "K_60M", "K_30M", "K_15M", "K_5M"]]
+
+
+def test_cache_update_rejects_mixing_all_etfs_with_other_sources(tmp_path):
+    result = runner.invoke(
+        app,
+        ["cache", "update", "--all-etfs", "--codes", "513130", "--cache-path", str(tmp_path / "cache.sqlite3")],
+    )
+
+    assert result.exit_code != 0
+    assert "--all-etfs" in result.output
+
+
 def test_cache_update_wraps_multiple_stocks_in_one_baostock_session(tmp_path):
     sessions = []
 
@@ -438,6 +475,64 @@ def test_portfolio_delete_reports_missing_stock(tmp_path):
     assert "未找到跟踪股票：000001" in result.output
 
 
+def test_etf_init_and_set_manage_one_tracked_etf_table(tmp_path):
+    cache_file = tmp_path / "cache.sqlite3"
+
+    initialized = runner.invoke(app, ["etf", "init", "--cache-path", str(cache_file)])
+    updated = runner.invoke(
+        app,
+        [
+            "etf",
+            "set",
+            "--code",
+            "513130",
+            "--name",
+            "恒生科技ETF",
+            "--quantity",
+            "0",
+            "--category",
+            "港股科技",
+            "--tracking-index",
+            "恒生科技指数",
+            "--cache-path",
+            str(cache_file),
+        ],
+    )
+    listed = runner.invoke(app, ["etf", "list", "--cache-path", str(cache_file)])
+
+    assert initialized.exit_code == 0, initialized.output
+    assert updated.exit_code == 0, updated.output
+    assert "513130" in listed.output
+    assert "恒生科技ETF" in listed.output
+    assert "港股科技" in listed.output
+    assert "观察" in listed.output
+
+
+def test_etf_delete_hides_tracked_etf_from_list(tmp_path):
+    cache_file = tmp_path / "cache.sqlite3"
+
+    created = runner.invoke(
+        app,
+        ["etf", "set", "--code", "159995", "--name", "芯片ETF", "--quantity", "0", "--cache-path", str(cache_file)],
+    )
+    deleted = runner.invoke(app, ["etf", "delete", "--code", "159995", "--cache-path", str(cache_file)])
+    listed = runner.invoke(app, ["etf", "list", "--cache-path", str(cache_file)])
+
+    assert created.exit_code == 0, created.output
+    assert deleted.exit_code == 0, deleted.output
+    assert "已删除 159995" in deleted.output
+    assert "芯片ETF" not in listed.output
+
+
+def test_etf_delete_reports_missing_symbol(tmp_path):
+    cache_file = tmp_path / "cache.sqlite3"
+
+    result = runner.invoke(app, ["etf", "delete", "--code", "513130", "--cache-path", str(cache_file)])
+
+    assert result.exit_code != 0
+    assert "未找到跟踪 ETF：513130" in result.output
+
+
 def test_portfolio_analyze_outputs_holding_and_watch_sections(tmp_path):
     positions = [
         {"symbol": "002536", "name": "飞龙股份", "quantity": 400, "cost_price": 41.343, "status": "holding"},
@@ -447,16 +542,62 @@ def test_portfolio_analyze_outputs_holding_and_watch_sections(tmp_path):
     with patch("cli.PortfolioStore") as mock_store, patch("cli._portfolio_analysis_levels", return_value=(levels, 43.07)):
         mock_store.return_value.list_positions.return_value = positions
 
-        result = runner.invoke(app, ["portfolio", "analyze", "--cache-path", str(tmp_path / "cache.sqlite3")])
+        result = runner.invoke(app, ["portfolio", "analyze", "--cache-path", str(tmp_path / "cache.sqlite3"), "--output-dir", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert "持仓股" in result.output
-    assert "观察股" in result.output
-    assert "飞龙股份" in result.output
-    assert "平安银行" in result.output
+    summary = next(tmp_path.glob("portfolio_summary_*.txt")).read_text(encoding="utf-8")
+    assert "持仓股" in summary
+    assert "观察股" in summary
+    assert "飞龙股份" in summary
+    assert "平安银行" in summary
 
 
-def test_portfolio_analyze_prints_detailed_report_lines(tmp_path):
+def test_portfolio_analyze_saves_model_json_and_summary_to_dated_output_files(tmp_path):
+    positions = [
+        {"symbol": "002536", "name": "飞龙股份", "quantity": 400, "cost_price": 41.343, "status": "holding"},
+        {"symbol": "000001", "name": "平安银行", "quantity": 0, "cost_price": None, "status": "watching"},
+    ]
+    levels = {"K_WEEK": {"buy_sell_points": []}, "K_DAY": {"buy_sell_points": []}, "K_30M": {"buy_sell_points": []}}
+    with (
+        patch("cli.PortfolioStore") as mock_store,
+        patch("cli._portfolio_analysis_levels", return_value=(levels, 43.07)),
+        patch("cli.date") as mock_date,
+    ):
+        mock_store.return_value.list_positions.return_value = positions
+        mock_date.today.return_value.isoformat.return_value = "2026-06-30"
+
+        result = runner.invoke(
+            app,
+            [
+                "portfolio",
+                "analyze",
+                "--cache-path",
+                str(tmp_path / "cache.sqlite3"),
+                "--output-dir",
+                str(tmp_path),
+            ],
+        )
+
+    output_path = tmp_path / "portfolio_analyze_2026-06-30.txt"
+    model_path = tmp_path / "portfolio_model_2026-06-30.json"
+    summary_path = tmp_path / "portfolio_summary_2026-06-30.txt"
+    assert result.exit_code == 0, result.output
+    assert f"模型输入已保存：{model_path}" in result.output
+    assert f"摘要已保存：{summary_path}" in result.output
+    assert not output_path.exists()
+    model = json.loads(model_path.read_text(encoding="utf-8"))
+    assert model["generated_on"] == "2026-06-30"
+    assert [item["symbol"] for item in model["items"]] == ["002536", "000001"]
+    assert model["items"][0]["name"] == "飞龙股份"
+    assert model["items"][0]["status"] == "holding"
+    summary = summary_path.read_text(encoding="utf-8")
+    assert "持仓股" in summary
+    assert "飞龙股份" in summary
+    assert "观察股" in summary
+    assert "平安银行" in summary
+
+
+def test_portfolio_analyze_summary_includes_linkage_groups(tmp_path):
     positions = [
         {"symbol": "002536", "name": "飞龙股份", "quantity": 400, "cost_price": 41.343, "status": "holding"},
     ]
@@ -481,12 +622,16 @@ def test_portfolio_analyze_prints_detailed_report_lines(tmp_path):
     with patch("cli.PortfolioStore") as mock_store, patch("cli._portfolio_analysis_levels", return_value=(levels, 43.07)):
         mock_store.return_value.list_positions.return_value = positions
 
-        result = runner.invoke(app, ["portfolio", "analyze", "--cache-path", str(tmp_path / "cache.sqlite3")])
+        result = runner.invoke(app, ["portfolio", "analyze", "--cache-path", str(tmp_path / "cache.sqlite3"), "--output-dir", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert "详细报告：" in result.output
-    assert "最近买卖点：" in result.output
-    assert "结构：" in result.output
+    model = json.loads(next(tmp_path.glob("portfolio_model_*.json")).read_text(encoding="utf-8"))
+    assert model["items"][0]["weekly"]["trend"] == "线段向上（2026/04/02 至 2026/06/19）"
+    assert model["items"][0]["daily"]["latest_point"]["text"] == "买 2（2026/06/23）"
+    assert model["items"][0]["linkage"]["label"] == "日线新买点待30分钟确认"
+    summary = next(tmp_path.glob("portfolio_summary_*.txt")).read_text(encoding="utf-8")
+    assert "日线新买点待30分钟确认" in summary
+    assert "飞龙股份" in summary
 
 
 def test_portfolio_analyze_wraps_multiple_stocks_in_one_baostock_session(tmp_path):
@@ -525,11 +670,25 @@ def test_portfolio_analyze_code_limits_refresh_and_analysis_to_one_tracked_stock
     with patch("cli.PortfolioStore") as mock_store, patch("cli._portfolio_analysis_levels", return_value=(levels, 43.07)) as mock_levels:
         mock_store.return_value.list_positions.return_value = positions
 
-        result = runner.invoke(app, ["portfolio", "analyze", "--code", "sz.002050", "--refresh", "--cache-path", str(tmp_path / "cache.sqlite3")])
+        result = runner.invoke(
+            app,
+            [
+                "portfolio",
+                "analyze",
+                "--code",
+                "sz.002050",
+                "--refresh",
+                "--cache-path",
+                str(tmp_path / "cache.sqlite3"),
+                "--output-dir",
+                str(tmp_path),
+            ],
+        )
 
     assert result.exit_code == 0, result.output
-    assert "三花智控" in result.output
-    assert "飞龙股份" not in result.output
+    summary = next(tmp_path.glob("portfolio_summary_*.txt")).read_text(encoding="utf-8")
+    assert "三花智控" in summary
+    assert "飞龙股份" not in summary
     assert mock_levels.call_args.args[0] == "002050"
     assert mock_levels.call_args.args[2] is True
 
@@ -539,11 +698,25 @@ def test_portfolio_analyze_code_allows_untracked_stock_without_persisting_it(tmp
     with patch("cli.PortfolioStore") as mock_store, patch("cli._portfolio_analysis_levels", return_value=(levels, 10.0)) as mock_levels:
         mock_store.return_value.list_positions.return_value = []
 
-        result = runner.invoke(app, ["portfolio", "analyze", "--code", "002240", "--refresh", "--cache-path", str(tmp_path / "cache.sqlite3")])
+        result = runner.invoke(
+            app,
+            [
+                "portfolio",
+                "analyze",
+                "--code",
+                "002240",
+                "--refresh",
+                "--cache-path",
+                str(tmp_path / "cache.sqlite3"),
+                "--output-dir",
+                str(tmp_path),
+            ],
+        )
 
     assert result.exit_code == 0, result.output
-    assert "临时观察股" in result.output
-    assert "002240" in result.output
+    summary = next(tmp_path.glob("portfolio_summary_*.txt")).read_text(encoding="utf-8")
+    assert "临时观察股" in summary
+    assert "002240" in summary
     assert mock_levels.call_args.args[0] == "002240"
     assert not mock_store.return_value.set_position.called
 

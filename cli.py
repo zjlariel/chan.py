@@ -15,7 +15,8 @@ from Chan import CChan
 from ChanConfig import CChanConfig
 from App.analysis_export import build_document
 from App.analysis_summary import format_summary
-from App.portfolio_analysis import build_observation
+from App.etf_store import EtfStore
+from App.portfolio_analysis import build_model_item, format_portfolio_summary
 from App.portfolio_store import PortfolioStore
 from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
 from DataAPI.BaoStockAPI import CBaoStock
@@ -252,24 +253,30 @@ cache_app = typer.Typer(help="离线缓存管理")
 app.add_typer(cache_app, name="cache")
 portfolio_app = typer.Typer(help="持仓与观察股跟踪")
 app.add_typer(portfolio_app, name="portfolio")
+etf_app = typer.Typer(help="ETF 基金跟踪")
+app.add_typer(etf_app, name="etf")
 
 
 @cache_app.command(name="update", help="刷新缓存数据")
 def cache_update(
     codes: Annotated[Optional[str], typer.Option("--codes", help="逗号分隔的股票代码")] = None,
     all_stocks: Annotated[bool, typer.Option("--all", help="更新数据库中全部启用的跟踪股票")] = False,
+    all_etfs: Annotated[bool, typer.Option("--all-etfs", help="更新数据库中全部启用的跟踪 ETF")] = False,
     mode: Annotated[str, typer.Option("--mode", help="刷新模式：auto、live 或 eod")] = "auto",
     full: Annotated[bool, typer.Option("--full", help="从完整保留窗口重新拉取数据")] = False,
     cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
 ):
     if mode not in {"auto", "live", "eod"}:
         raise typer.BadParameter("mode 必须是 auto、live 或 eod")
-    if bool(codes) == all_stocks:
-        raise typer.BadParameter("必须且只能指定 --codes 或 --all")
+    selected_sources = sum([bool(codes), all_stocks, all_etfs])
+    if selected_sources != 1:
+        raise typer.BadParameter("必须且只能指定 --codes、--all 或 --all-etfs")
 
     types = LIVE_TYPES if mode == "live" else EOD_TYPES if mode == "eod" else AUTO_TYPES
     if all_stocks:
         code_list = [position["symbol"] for position in PortfolioStore(cache_path).list_positions()]
+    elif all_etfs:
+        code_list = [position["symbol"] for position in EtfStore(cache_path).list_positions()]
     else:
         code_list = [code.strip() for code in codes.split(",") if code.strip()]
     with CBaoStock.keep_alive():
@@ -365,11 +372,70 @@ def portfolio_list(
         )
 
 
+@etf_app.command(name="init", help="初始化 ETF 基金跟踪表")
+def etf_init(
+    cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
+):
+    store = EtfStore(cache_path)
+    store.initialize()
+    typer.echo("已初始化 ETF 跟踪表")
+
+
+@etf_app.command(name="set", help="新增或更新观察 ETF、持仓 ETF")
+def etf_set(
+    code: Annotated[str, typer.Option("--code", help="ETF 基金代码")],
+    name: Annotated[str, typer.Option("--name", help="ETF 基金名称")],
+    quantity: Annotated[int, typer.Option("--quantity", help="持仓份额，0 表示观察 ETF")],
+    available_quantity: Annotated[Optional[int], typer.Option("--available", help="可用份额")] = None,
+    cost_price: Annotated[Optional[float], typer.Option("--cost-price", help="持仓成本价")] = None,
+    category: Annotated[Optional[str], typer.Option("--category", help="行业或主题分类")] = None,
+    tracking_index: Annotated[Optional[str], typer.Option("--tracking-index", help="跟踪指数或参考指数")] = None,
+    note: Annotated[Optional[str], typer.Option("--note", help="备注")] = None,
+    cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
+):
+    store = EtfStore(cache_path)
+    store.set_position(code, name, quantity, available_quantity, cost_price, category, tracking_index, note)
+    typer.echo(f"已更新 {code}")
+
+
+@etf_app.command(name="delete", help="从 ETF 池删除跟踪基金")
+def etf_delete(
+    code: Annotated[str, typer.Option("--code", help="ETF 基金代码")],
+    cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
+):
+    store = EtfStore(cache_path)
+    normalized_code = _normalize_etf_code(code)
+    if not store.delete_position(normalized_code):
+        typer.echo(f"未找到跟踪 ETF：{normalized_code}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"已删除 {normalized_code}")
+
+
+@etf_app.command(name="list", help="列出持仓与观察 ETF")
+def etf_list(
+    cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
+):
+    positions = EtfStore(cache_path).list_positions()
+    if not positions:
+        typer.echo("没有跟踪 ETF")
+        return
+    typer.echo(f"{'状态':<8} {'代码':<8} {'名称':<16} {'份额':<10} {'可用':<10} {'成本':<10} {'分类':<12}")
+    for position in positions:
+        status = "持仓" if position["status"] == "holding" else "观察"
+        cost = "-" if position["cost_price"] is None else f"{position['cost_price']:.3f}"
+        category = position["category"] or "-"
+        typer.echo(
+            f"{status:<8} {position['symbol']:<8} {position['name']:<16} {position['quantity']:<10} "
+            f"{position['available_quantity']:<10} {cost:<10} {category:<12}"
+        )
+
+
 @portfolio_app.command(name="analyze", help="分析持仓卖点与观察股买点")
 def portfolio_analyze(
     code: Annotated[Optional[str], typer.Option("--code", help="仅分析指定的已跟踪股票")] = None,
     refresh: Annotated[bool, typer.Option("--refresh", help="先按 auto 模式刷新缓存")] = False,
     cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
+    output_dir: Annotated[Path, typer.Option("--output-dir", help="分析报告输出目录")] = Path("output"),
 ):
     positions = PortfolioStore(cache_path).list_positions()
     ad_hoc_stock = False
@@ -389,24 +455,46 @@ def portfolio_analyze(
         typer.echo("没有跟踪股票")
         return
     with CBaoStock.keep_alive():
-        for title, status in (("持仓股", "holding"), ("观察股", "watching")):
-            selected = [position for position in positions if position["status"] == status]
-            if not selected:
-                continue
+        items = _portfolio_analysis_model_items(positions, cache_path, refresh, ad_hoc_stock)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    generated_on = date.today().isoformat()
+    model_path = output_dir / f"portfolio_model_{generated_on}.json"
+    summary_path = output_dir / f"portfolio_summary_{generated_on}.txt"
+    model_path.write_text(
+        json.dumps({"generated_on": generated_on, "items": items}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    summary_path.write_text(format_portfolio_summary(items), encoding="utf-8")
+    typer.echo(f"模型输入已保存：{model_path}")
+    typer.echo(f"摘要已保存：{summary_path}")
+
+
+def _portfolio_analysis_model_items(positions, cache_path, refresh, ad_hoc_stock=False):
+    items = []
+    for title, status in (("持仓股", "holding"), ("观察股", "watching")):
+        selected = [position for position in positions if position["status"] == status]
+        if not selected:
+            continue
+        if ad_hoc_stock and status == "watching":
+            selected = [{**position, "status": "watching", "group_name": "临时观察股"} for position in selected]
+        for position in selected:
+            levels, latest_price = _portfolio_analysis_levels(position["symbol"], cache_path, refresh)
+            item = build_model_item(position, levels, latest_price)
+            item["section"] = title
             if ad_hoc_stock and status == "watching":
-                title = "临时观察股"
-            typer.echo(f"\n{title}")
-            for position in selected:
-                levels, latest_price = _portfolio_analysis_levels(position["symbol"], cache_path, refresh)
-                observation = build_observation(position, levels, latest_price)
-                typer.echo(observation["header"])
-                for line in observation["levels"]:
-                    typer.echo(f"  {line}")
-                for line in observation["details"]:
-                    typer.echo(f"  {line}")
+                item["section"] = "临时观察股"
+            items.append(item)
+    return items
 
 
 def _normalize_portfolio_code(code):
+    normalized = str(code).lower().replace(".", "")
+    if normalized[:2] in {"sh", "sz"}:
+        normalized = normalized[2:]
+    return normalized
+
+
+def _normalize_etf_code(code):
     normalized = str(code).lower().replace(".", "")
     if normalized[:2] in {"sh", "sz"}:
         normalized = normalized[2:]

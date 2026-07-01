@@ -74,6 +74,7 @@ chanpy cache update [OPTIONS]
 | --- | --- | --- |
 | `--mode` | 刷新模式：`auto`、`live` 或 `eod` | `auto` |
 | `--codes` | 逗号分隔的股票代码 | 必填 |
+| `--all-etfs` | 更新 `tracked_etfs` 表中全部启用 ETF | 关闭 |
 | `--full` | 从完整保留窗口重新拉取，而非增量更新 | 关闭 |
 | `--cache-path` | SQLite 缓存文件路径 | `.chanpy/cache.sqlite3` |
 
@@ -88,9 +89,10 @@ chanpy cache update [OPTIONS]
 chanpy cache update --mode live --codes 600000,000001
 chanpy cache update --mode eod --codes sz.002536 --cache-path .chanpy/cache.sqlite3
 chanpy cache update --all
+chanpy cache update --all-etfs --mode eod
 ```
 
-`--all` 会读取 SQLite 中 `tracked_stocks` 表的全部启用股票，并按指定模式更新；它与 `--codes` 不能同时使用。
+`--all` 会读取 SQLite 中 `tracked_stocks` 表的全部启用股票，并按指定模式更新。`--all-etfs` 会读取 `tracked_etfs` 表的全部启用 ETF。`--codes`、`--all`、`--all-etfs` 三者必须且只能指定一个。
 
 ---
 
@@ -128,10 +130,37 @@ chanpy portfolio delete --code 002460
 chanpy portfolio analyze
 chanpy portfolio analyze --refresh
 chanpy portfolio analyze --code 002050 --refresh
+chanpy portfolio analyze --output-dir output
 ```
 
 `portfolio delete --code <代码>` 会把股票从当前股票池中移除；这是软删除，只会将 `tracked_stocks.active` 标记为 `0`，不会物理删除历史记录、成本价、备注等信息。删除后该股票不会出现在 `portfolio list`、`portfolio analyze` 和 `cache update --all` 的启用股票范围内。后续可再次使用 `portfolio set` 重新加入。
 
-`portfolio analyze` 使用周线作为趋势背景、日线作为决策级别、30 分钟作为确认级别；不使用 5 分钟信号。持仓股同时显示卖点风险和加仓候选，观察股显示买点与关注优先级。它是规则化技术分析提示，不会自动执行交易。
+`portfolio analyze` 使用周线作为趋势背景、日线作为决策级别、30 分钟作为确认级别；不使用 5 分钟信号。分析结果默认保存为两份文件：`output/portfolio_model_YYYY-MM-DD.json` 给大模型做结构化分析，`output/portfolio_summary_YYYY-MM-DD.txt` 给人快速扫盘；可用 `--output-dir` 指定输出目录。持仓股同时显示卖点风险和加仓候选，观察股显示买点与关注优先级。它是规则化技术分析提示，不会自动执行交易。
 
 使用 `portfolio analyze --code <代码>` 分析未写入跟踪表的股票时，会以“临时观察股”身份分析，不会自动保存到数据库。
+
+---
+
+## etf：ETF 基金跟踪
+
+ETF 基金单独存储在缓存 SQLite 的 `tracked_etfs` 表中，不与 A 股股票池 `tracked_stocks` 混用。数量为 `0` 表示观察 ETF，数量大于 `0` 表示持仓 ETF。
+
+```bash
+chanpy etf init
+chanpy etf list
+chanpy etf set --code 513130 --name 恒生科技ETF --quantity 0 --category 港股科技 --tracking-index 恒生科技指数
+chanpy etf set --code 159995 --name 芯片ETF --quantity 10000 --available 10000 --cost-price 1.250 --category 半导体
+chanpy etf delete --code 513130
+```
+
+`etf delete --code <代码>` 是软删除，只会将 `tracked_etfs.active` 标记为 `0`，不会物理删除历史记录、成本价、分类和备注。
+
+当前 ETF 命令只负责跟踪表管理，不接入 `portfolio analyze` 和 `cache update --all`。ETF 行情与缠论分析需要单独验证数据源支持后再扩展。
+
+ETF K 线可以通过缓存命令按代码刷新。场内 ETF 支持裸码或带交易所前缀，`15` 开头默认深市，`51`、`56`、`58` 开头默认沪市；ETF 默认使用不复权口径。
+
+```bash
+chanpy cache update --codes 513130 --mode eod
+chanpy cache update --codes 159530 --mode eod
+chanpy cache update --all-etfs --mode eod
+```
