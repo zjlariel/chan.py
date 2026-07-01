@@ -7,6 +7,7 @@ from Common.func_util import kltype_lt_day, str2float
 from KLine.KLine_Unit import CKLine_Unit
 
 from .CommonStockAPI import CCommonStockApi
+from .Symbol import normalize_cn_symbol
 
 
 def create_item_dict(data, column_name):
@@ -64,20 +65,10 @@ class CBaoStock(CCommonStockApi):
 
     @staticmethod
     def normalize_symbol(code):
-        symbol = str(code).lower().replace(".", "")
-        if symbol[:2] in {"sh", "sz"}:
-            exchange, digits = symbol[:2], symbol[2:]
-            if len(digits) != 6 or not digits.isdigit():
-                raise ValueError(f"unsupported A-share symbol: {code}")
-            return f"{exchange}.{digits}"
-
-        if len(symbol) != 6 or not symbol.isdigit():
-            raise ValueError(f"unsupported A-share symbol: {code}")
-        if symbol.startswith("6"):
-            return f"sh.{symbol}"
-        if symbol.startswith(("0", "2", "3")):
-            return f"sz.{symbol}"
-        raise ValueError(f"unsupported A-share symbol: {code}")
+        try:
+            return normalize_cn_symbol(code, dotted=True)
+        except ValueError as exc:
+            raise ValueError(f"unsupported A-share symbol: {code}") from exc
 
     def get_kl_data(self):
         # 天级别以上才有详细交易信息
@@ -107,7 +98,7 @@ class CBaoStock(CCommonStockApi):
             raise Exception(rs.error_msg)
         code, code_name, ipoDate, outDate, stock_type, status = rs.get_row_data()
         self.name = code_name
-        self.is_stock = (stock_type == '1')
+        self.is_stock = (stock_type in {'1', '5'})
 
     @classmethod
     def do_init(cls):

@@ -31,9 +31,15 @@ SINA_ROWS = [
 
 @pytest.mark.parametrize(
     ("code", "expected"),
-    [("600000", "sh600000"), ("sz.000001", "sz000001"), ("sh600000", "sh600000")],
+    [
+        ("600000", "sh600000"),
+        ("513130", "sh513130"),
+        ("159530", "sz159530"),
+        ("sz.000001", "sz000001"),
+        ("sh600000", "sh600000"),
+    ],
 )
-def test_normalizes_a_share_symbols(code, expected):
+def test_normalizes_a_share_and_etf_symbols(code, expected):
     assert CSina.normalize_symbol(code) == expected
 
 

@@ -84,6 +84,27 @@ def test_end_of_day_cache_miss_fetches_baostock(tmp_path):
     assert FakeSina.calls == []
 
 
+def test_cache_accepts_bare_etf_symbols_and_fetches_from_baostock(tmp_path):
+    FakeSina.calls = []
+    FakeBao.calls = []
+    api = CCache(
+        "513130",
+        KL_TYPE.K_DAY,
+        "2026-06-18",
+        "2026-06-18",
+        AUTYPE.NONE,
+        cache_path=tmp_path / "cache.sqlite3",
+        now=datetime(2026, 6, 18, 19, 0),
+        provider_classes={"sina": FakeSina, "baostock": FakeBao},
+        mode="eod",
+    )
+
+    list(api.get_kl_data())
+
+    assert api.symbol == "sh513130"
+    assert FakeBao.calls[0][:4] == ("sh.513130", KL_TYPE.K_DAY, "2026-06-18", "2026-06-18")
+
+
 def test_refresh_persists_provider_stock_name(tmp_path):
     api = CCache(
         "600000",
@@ -119,6 +140,25 @@ def test_end_of_day_cache_uses_qfq_when_autype_is_omitted(tmp_path):
     list(api.get_kl_data())
 
     assert FakeBao.calls[0][-1] == AUTYPE.QFQ
+
+
+def test_etf_cache_uses_none_autype_when_autype_is_omitted(tmp_path):
+    FakeSina.calls = []
+    FakeBao.calls = []
+    api = CCache(
+        "513130",
+        KL_TYPE.K_DAY,
+        "2026-06-18",
+        "2026-06-18",
+        cache_path=tmp_path / "cache.sqlite3",
+        now=datetime(2026, 6, 18, 19, 0),
+        provider_classes={"sina": FakeSina, "baostock": FakeBao},
+        mode="eod",
+    )
+
+    list(api.get_kl_data())
+
+    assert FakeBao.calls[0][-1] == AUTYPE.NONE
 
 
 def test_subsequent_refresh_uses_a_short_overlap_instead_of_full_window(tmp_path):

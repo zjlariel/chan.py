@@ -9,6 +9,7 @@ from Common.func_util import str2float
 from KLine.KLine_Unit import CKLine_Unit
 
 from .CommonStockAPI import CCommonStockApi
+from .Symbol import normalize_cn_symbol
 
 
 class CSina(CCommonStockApi):
@@ -27,15 +28,10 @@ class CSina(CCommonStockApi):
 
     @staticmethod
     def normalize_symbol(code):
-        symbol = code.lower().replace(".", "")
-        exchange = symbol[:2] if symbol[:2] in {"sh", "sz"} else ""
-        digits = symbol[2:] if exchange else symbol
-        if len(digits) != 6 or not digits.isdigit() or digits[0] not in {"0", "3", "6"}:
-            raise ValueError(f"unsupported A-share symbol: {code}")
-        expected_exchange = "sh" if digits[0] == "6" else "sz"
-        if exchange and exchange != expected_exchange:
-            raise ValueError(f"A-share symbol exchange does not match code: {code}")
-        return f"{expected_exchange}{digits}"
+        try:
+            return normalize_cn_symbol(code)
+        except ValueError as exc:
+            raise ValueError(f"unsupported A-share or ETF symbol: {code}") from exc
 
     @classmethod
     def scale_for(cls, k_type):

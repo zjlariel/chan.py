@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from Common.CEnum import AUTYPE, KL_TYPE
 from DataAPI.SinaAPI import CSina
+from DataAPI.Symbol import is_etf_symbol
 
 from .CacheStore import CacheStore
 from .CommonStockAPI import CCommonStockApi
@@ -29,13 +30,14 @@ class CCache(CCommonStockApi):
         k_type,
         begin_date=None,
         end_date=None,
-        autype=AUTYPE.QFQ,
+        autype=None,
         cache_path=None,
         now=None,
         provider_classes=None,
         mode="auto",
     ):
-        super().__init__(code, k_type, begin_date, end_date, autype)
+        effective_autype = autype or (AUTYPE.NONE if is_etf_symbol(code) else AUTYPE.QFQ)
+        super().__init__(code, k_type, begin_date, end_date, effective_autype)
         if mode not in {"auto", "live", "eod"}:
             raise ValueError(f"unknown cache refresh mode: {mode}")
         self.symbol = CSina.normalize_symbol(code)
