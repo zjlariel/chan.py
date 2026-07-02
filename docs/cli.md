@@ -161,7 +161,7 @@ chanpy etf analyze --code 159530 --output-dir output
 
 ETF 命令负责跟踪表管理和批量缠论跟踪；ETF 的 K 线刷新通过 `cache update` 完成，ETF 池的批量分析通过 `etf analyze` 完成。场内 ETF 支持裸码或带交易所前缀，`15` 开头默认深市，`51`、`56`、`58` 开头默认沪市；ETF 默认使用不复权口径。
 
-ETF 的日线和周线 EOD 缓存优先使用东方财富历史行情，以获得更完整的长期数据；ETF 分钟线仍按缓存刷新模式使用 Baostock 或新浪。
+ETF 的日线和周线 EOD 缓存优先使用 Yahoo Finance 历史行情，东方财富作为备用数据源，以获得更完整且更稳定的长期数据；ETF 分钟线仍按缓存刷新模式使用 Baostock 或新浪。
 
 ```bash
 chanpy cache update --codes 513130 --mode eod

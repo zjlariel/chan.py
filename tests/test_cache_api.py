@@ -45,6 +45,18 @@ class FakeEastMoney(FakeSina):
     name = "ETF"
 
 
+class FakeYahoo(FakeSina):
+    calls = []
+    name = "ETF Yahoo"
+
+
+class FailingYahoo(FakeSina):
+    calls = []
+
+    def get_kl_data(self):
+        raise RuntimeError("Yahoo 暂不可用")
+
+
 class PartialBao(FakeSina):
     calls = []
 
@@ -114,10 +126,11 @@ def test_end_of_day_cache_miss_fetches_baostock(tmp_path):
     assert FakeSina.calls == []
 
 
-def test_cache_accepts_bare_etf_symbols_and_fetches_daily_from_eastmoney(tmp_path):
+def test_cache_accepts_bare_etf_symbols_and_fetches_daily_from_yahoo(tmp_path):
     FakeSina.calls = []
     FakeBao.calls = []
     FakeEastMoney.calls = []
+    FakeYahoo.calls = []
     api = CCache(
         "513130",
         KL_TYPE.K_DAY,
@@ -126,14 +139,15 @@ def test_cache_accepts_bare_etf_symbols_and_fetches_daily_from_eastmoney(tmp_pat
         AUTYPE.NONE,
         cache_path=tmp_path / "cache.sqlite3",
         now=datetime(2026, 6, 18, 19, 0),
-        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney},
+        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney, "yahoo": FakeYahoo},
         mode="eod",
     )
 
     list(api.get_kl_data())
 
     assert api.symbol == "sh513130"
-    assert FakeEastMoney.calls[0][:4] == ("513130", KL_TYPE.K_DAY, "2026-06-18", "2026-06-18")
+    assert FakeYahoo.calls[0][:4] == ("513130", KL_TYPE.K_DAY, "2026-06-18", "2026-06-18")
+    assert FakeEastMoney.calls == []
     assert FakeBao.calls == []
 
 
@@ -178,6 +192,7 @@ def test_etf_cache_uses_none_autype_when_autype_is_omitted(tmp_path):
     FakeSina.calls = []
     FakeBao.calls = []
     FakeEastMoney.calls = []
+    FakeYahoo.calls = []
     api = CCache(
         "513130",
         KL_TYPE.K_DAY,
@@ -185,18 +200,19 @@ def test_etf_cache_uses_none_autype_when_autype_is_omitted(tmp_path):
         "2026-06-18",
         cache_path=tmp_path / "cache.sqlite3",
         now=datetime(2026, 6, 18, 19, 0),
-        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney},
+        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney, "yahoo": FakeYahoo},
         mode="eod",
     )
 
     list(api.get_kl_data())
 
-    assert FakeEastMoney.calls[0][-1] == AUTYPE.NONE
+    assert FakeYahoo.calls[0][-1] == AUTYPE.NONE
 
 
-def test_etf_weekly_eod_cache_uses_eastmoney(tmp_path):
+def test_etf_weekly_eod_cache_uses_yahoo(tmp_path):
     FakeBao.calls = []
     FakeEastMoney.calls = []
+    FakeYahoo.calls = []
     api = CCache(
         "515030",
         KL_TYPE.K_WEEK,
@@ -204,19 +220,42 @@ def test_etf_weekly_eod_cache_uses_eastmoney(tmp_path):
         "2026-07-02",
         cache_path=tmp_path / "cache.sqlite3",
         now=datetime(2026, 7, 2, 19, 0),
-        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney},
+        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney, "yahoo": FakeYahoo},
         mode="eod",
     )
 
     api.refresh()
 
-    assert FakeEastMoney.calls[0][:4] == ("515030", KL_TYPE.K_WEEK, "2023-03-20", "2026-07-02")
+    assert FakeYahoo.calls[0][:4] == ("515030", KL_TYPE.K_WEEK, "2023-03-20", "2026-07-02")
+    assert FakeEastMoney.calls == []
     assert FakeBao.calls == []
+
+
+def test_etf_daily_eod_cache_falls_back_to_eastmoney_when_yahoo_fails(tmp_path):
+    FailingYahoo.calls = []
+    FakeEastMoney.calls = []
+    api = CCache(
+        "515030",
+        KL_TYPE.K_DAY,
+        "2023-03-20",
+        "2026-07-02",
+        cache_path=tmp_path / "cache.sqlite3",
+        now=datetime(2026, 7, 2, 19, 0),
+        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney, "yahoo": FailingYahoo},
+        mode="eod",
+    )
+
+    result = api.refresh()
+
+    assert FailingYahoo.calls[0][:4] == ("515030", KL_TYPE.K_DAY, "2023-03-20", "2026-07-02")
+    assert FakeEastMoney.calls[0][:4] == ("515030", KL_TYPE.K_DAY, "2023-03-20", "2026-07-02")
+    assert result == {"eastmoney": {"inserted": 1, "updated": 0}}
 
 
 def test_etf_minute_eod_cache_keeps_using_baostock(tmp_path):
     FakeBao.calls = []
     FakeEastMoney.calls = []
+    FakeYahoo.calls = []
     api = CCache(
         "515030",
         KL_TYPE.K_30M,
@@ -224,7 +263,7 @@ def test_etf_minute_eod_cache_keeps_using_baostock(tmp_path):
         "2026-06-18",
         cache_path=tmp_path / "cache.sqlite3",
         now=datetime(2026, 6, 18, 19, 0),
-        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney},
+        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney, "yahoo": FakeYahoo},
         mode="eod",
     )
 
@@ -232,6 +271,7 @@ def test_etf_minute_eod_cache_keeps_using_baostock(tmp_path):
 
     assert FakeBao.calls[0][:4] == ("sh.515030", KL_TYPE.K_30M, "2026-06-01", "2026-06-18")
     assert FakeEastMoney.calls == []
+    assert FakeYahoo.calls == []
 
 
 def test_refresh_marks_coverage_from_actual_returned_bar_range(tmp_path):
@@ -244,7 +284,7 @@ def test_refresh_marks_coverage_from_actual_returned_bar_range(tmp_path):
         AUTYPE.NONE,
         cache_path=tmp_path / "cache.sqlite3",
         now=datetime(2026, 7, 2, 19, 0),
-        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": PartialBao},
+        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney, "yahoo": PartialBao},
         mode="eod",
     )
 
@@ -264,7 +304,7 @@ def test_auto_refresh_does_not_overstate_coverage_when_provider_returns_partial_
         AUTYPE.NONE,
         cache_path=tmp_path / "cache.sqlite3",
         now=datetime(2026, 7, 2, 19, 0),
-        provider_classes={"sina": FakeSina, "baostock": PartialBao},
+        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney, "yahoo": PartialBao},
         mode="auto",
     )
 

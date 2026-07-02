@@ -3,6 +3,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from Common.CEnum import AUTYPE, KL_TYPE
+from Common.ChanException import CChanException
 from DataAPI.SinaAPI import CSina
 from DataAPI.Symbol import is_etf_symbol
 
@@ -49,19 +50,17 @@ class CCache(CCommonStockApi):
     def get_kl_data(self):
         begin_date, end_date = self._requested_range()
         if not self.store.covers(self.symbol, self.k_type, begin_date, end_date):
-            provider_name = self._provider_name()
-            if provider_name:
-                self._refresh(provider_name, begin_date, end_date, begin_date)
+            self._refresh_first_available(begin_date, end_date, begin_date)
         yield from self.store.read_bars(self.symbol, self.k_type, begin_date, end_date)
 
     def refresh(self, full=False):
         begin_date, end_date = self._requested_range()
         if self.mode == "auto":
             return self._refresh_auto(begin_date, end_date, full)
-        provider_name = self._provider_name()
-        if provider_name:
+        provider_names = self._provider_names()
+        if provider_names:
             fetch_begin = begin_date if full or not self.store.covers(self.symbol, self.k_type, begin_date, end_date) else self._incremental_begin(begin_date)
-            return self._refresh(provider_name, fetch_begin, end_date, begin_date)
+            return self._refresh_first_available(fetch_begin, end_date, begin_date)
         return {}
 
     def _refresh_auto(self, begin_date, end_date, full):
@@ -80,7 +79,7 @@ class CCache(CCommonStockApi):
             if today_begin <= end_date:
                 self._merge_refresh_counts(refresh_counts, self._refresh("sina", today_begin, end_date))
         elif fetch_begin <= min(end_date, yesterday):
-            self._merge_refresh_counts(refresh_counts, self._refresh("baostock", fetch_begin, min(end_date, yesterday)))
+            self._merge_refresh_counts(refresh_counts, self._refresh_first_available(fetch_begin, min(end_date, yesterday)))
 
         if refresh_counts:
             self.store.prune_before(self.symbol, self.k_type, begin_date)
@@ -88,6 +87,22 @@ class CCache(CCommonStockApi):
             if actual_range:
                 self.store.replace_coverage(self.symbol, self.k_type, actual_range[0], actual_range[1], "auto")
         return refresh_counts
+
+    def _refresh_first_available(self, begin_date, end_date, retention_begin=None):
+        provider_names = self._provider_names()
+        if not provider_names:
+            return {}
+        last_error = None
+        for provider_name in provider_names:
+            try:
+                refresh_counts = self._refresh(provider_name, begin_date, end_date, retention_begin)
+                if refresh_counts:
+                    return refresh_counts
+            except (CChanException, RuntimeError, ValueError) as exc:
+                last_error = exc
+        if last_error:
+            raise last_error
+        return {}
 
     def _refresh(self, provider_name, begin_date, end_date, retention_begin=None):
         provider_class = self.provider_classes[provider_name]
@@ -147,17 +162,17 @@ class CCache(CCommonStockApi):
         begin_date = (datetime.fromisoformat(end_date).date() - timedelta(days=days)).isoformat()
         return begin_date, end_date
 
-    def _provider_name(self):
+    def _provider_names(self):
         mode = self.mode
         if mode == "auto":
             mode = "live" if self._is_market_open() else "eod"
         if mode == "live" and self.k_type in self.MINUTE_TYPES:
-            return "sina"
+            return ["sina"]
         if mode == "eod" and self.k_type == KL_TYPE.K_1M:
-            return None
+            return []
         if mode == "eod" and is_etf_symbol(self.symbol) and self.k_type in {KL_TYPE.K_DAY, KL_TYPE.K_WEEK}:
-            return "eastmoney"
-        return "baostock"
+            return ["yahoo", "eastmoney"]
+        return ["baostock"]
 
     def _is_market_open(self):
         now = self.now
@@ -171,7 +186,7 @@ class CCache(CCommonStockApi):
     def _provider_code(self, provider_name):
         if provider_name == "sina":
             return self.symbol
-        if provider_name == "eastmoney":
+        if provider_name in {"eastmoney", "yahoo"}:
             return self.symbol[2:]
         return f"{self.symbol[:2]}.{self.symbol[2:]}"
 
@@ -179,8 +194,9 @@ class CCache(CCommonStockApi):
     def _default_providers():
         from DataAPI.BaoStockAPI import CBaoStock
         from DataAPI.EastMoneyAPI import CEastMoney
+        from DataAPI.YahooFinanceAPI import CYahooFinance
 
-        return {"sina": CSina, "baostock": CBaoStock, "eastmoney": CEastMoney}
+        return {"sina": CSina, "baostock": CBaoStock, "eastmoney": CEastMoney, "yahoo": CYahooFinance}
 
     def _remember_stock_name(self, provider, provider_name):
         name = getattr(provider, "name", None)
