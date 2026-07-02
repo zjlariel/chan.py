@@ -5,11 +5,13 @@ from zoneinfo import ZoneInfo
 
 from Common.CEnum import DATA_FIELD
 from Common.CTime import CTime
+from DataAPI.Symbol import is_etf_symbol
 from KLine.KLine_Unit import CKLine_Unit
 
 
 class CacheStore:
     COVERAGE_EDGE_TOLERANCE_DAYS = 14
+    FIRST_AVAILABLE_MIN_BARS = 20
 
     def __init__(self, path):
         self.path = Path(path)
@@ -172,25 +174,55 @@ class CacheStore:
 
     def covers(self, symbol, k_type, begin_date, end_date):
         with self._connect() as connection:
-            row = connection.execute(
+            rows = connection.execute(
                 """
-                SELECT 1 FROM coverage
-                WHERE symbol = ? AND k_type = ? AND start_date <= ? AND end_date >= ?
-                LIMIT 1
+                SELECT start_date, end_date FROM coverage
+                WHERE symbol = ? AND k_type = ?
                 """,
-                (symbol, k_type.name, begin_date[:10], end_date[:10]),
-            ).fetchone()
-        if row is None:
+                (symbol, k_type.name),
+            ).fetchall()
+        if not rows:
             return False
         actual_range = self.timestamp_range(symbol, k_type, begin_date, end_date)
         if actual_range is None:
             return False
+        actual_count = self.count_bars(symbol, k_type, begin_date, end_date)
         requested_start = datetime.fromisoformat(self._range_start(begin_date))
         requested_end = datetime.fromisoformat(self._range_end(end_date))
         actual_start = datetime.fromisoformat(actual_range[0])
         actual_end = datetime.fromisoformat(actual_range[1])
         tolerance = timedelta(days=self.COVERAGE_EDGE_TOLERANCE_DAYS)
-        return actual_start <= requested_start + tolerance and actual_end >= requested_end - tolerance
+        actual_start_date = actual_start.date().isoformat()
+        for row in rows:
+            coverage_start = datetime.fromisoformat(self._range_start(row["start_date"]))
+            coverage_end = datetime.fromisoformat(self._range_end(row["end_date"]))
+            starts_from_first_available = (
+                is_etf_symbol(symbol)
+                and actual_count >= self.FIRST_AVAILABLE_MIN_BARS
+                and actual_start > requested_start + tolerance
+                and row["start_date"] == actual_start_date
+            )
+            coverage_start_ok = coverage_start <= requested_start or starts_from_first_available
+            coverage_end_ok = coverage_end >= requested_end - tolerance
+            actual_start_ok = actual_start <= requested_start + tolerance or starts_from_first_available
+            actual_end_ok = actual_end >= requested_end - tolerance
+            if coverage_start_ok and coverage_end_ok and actual_start_ok and actual_end_ok:
+                return True
+        return False
+
+    def count_bars(self, symbol, k_type, begin_date=None, end_date=None):
+        clauses = ["symbol = ?", "k_type = ?"]
+        params = [symbol, k_type.name]
+        if begin_date:
+            clauses.append("timestamp >= ?")
+            params.append(self._range_start(begin_date))
+        if end_date:
+            clauses.append("timestamp <= ?")
+            params.append(self._range_end(end_date))
+        query = f"SELECT COUNT(*) AS count FROM bars WHERE {' AND '.join(clauses)}"
+        with self._connect() as connection:
+            row = connection.execute(query, params).fetchone()
+        return row["count"] if row else 0
 
     def upsert_stock_name(self, symbol, name, source):
         name = str(name).strip()

@@ -65,6 +65,21 @@ def test_coverage_requires_actual_bars_to_span_requested_range(tmp_path: Path):
     assert store.covers("sh515030", KL_TYPE.K_DAY, "2026-01-05", "2026-07-02")
 
 
+def test_coverage_accepts_first_available_bar_after_requested_start(tmp_path: Path):
+    store = CacheStore(tmp_path / "cache.sqlite3")
+    store.upsert_bars(
+        "sz159530",
+        KL_TYPE.K_DAY,
+        [make_bar(day, 0, 0, 1.0, year=2024, month=1) for day in range(10, 32)]
+        + [make_bar(day, 0, 0, 1.0, year=2024, month=2) for day in range(1, 5)]
+        + [make_bar(2, 0, 0, 1.1, year=2026, month=7)],
+        "yahoo",
+    )
+    store.mark_covered("sz159530", KL_TYPE.K_DAY, "2024-01-10", "2026-07-02", "yahoo")
+
+    assert store.covers("sz159530", KL_TYPE.K_DAY, "2023-03-20", "2026-07-02")
+
+
 def test_prunes_old_bars_and_reports_latest_timestamp(tmp_path: Path):
     store = CacheStore(tmp_path / "cache.sqlite3")
     store.upsert_bars(
