@@ -27,9 +27,31 @@ def build_observation(position, levels, latest_price):
     }
 
 
+def build_model_input_item(position, levels, latest_price):
+    return {
+        "symbol": position["symbol"],
+        "name": position["name"],
+        "status": position["status"],
+        "quantity": position.get("quantity"),
+        "available_quantity": position.get("available_quantity"),
+        "cost_price": position.get("cost_price"),
+        "latest_price": latest_price,
+        "levels": {
+            "K_WEEK": _raw_level_model(levels.get("K_WEEK"), point_limit=3, bi_limit=5, segment_limit=3, zs_limit=2, cross_limit=0),
+            "K_DAY": _raw_level_model(levels.get("K_DAY"), point_limit=5, bi_limit=5, segment_limit=3, zs_limit=3, cross_limit=5),
+            "K_30M": _raw_level_model(levels.get("K_30M"), point_limit=5, bi_limit=5, segment_limit=3, zs_limit=2, cross_limit=0),
+        },
+    }
+
+
 def build_model_item(position, levels, latest_price):
     day_state = _point_state(levels.get("K_DAY"), "日线", current_days=10, weak_days=20)
+    day_sell_state = _sell_point_state(levels.get("K_DAY"), "日线", current_days=10, weak_days=20)
     m30_state = _point_state(levels.get("K_30M"), "30分钟", current_days=3, weak_days=5)
+    daily_decision = _model_daily_decision(levels.get("K_DAY"), day_state)
+    daily_sell_risk = _model_daily_sell_risk(day_sell_state)
+    m30_execution = _model_m30_execution(m30_state)
+    position_decision = _model_position_decision(position, daily_decision, daily_sell_risk)
     return {
         "symbol": position["symbol"],
         "name": position["name"],
@@ -41,12 +63,12 @@ def build_model_item(position, levels, latest_price):
         "weekly": _model_weekly(levels.get("K_WEEK")),
         "daily": _model_decision_level(levels.get("K_DAY"), day_state),
         "m30": _model_decision_level(levels.get("K_30M"), m30_state),
-        "linkage": {
-            "daily_structure": _daily_construction_text(levels.get("K_DAY")),
-            "daily_buy": _model_point_state(day_state),
-            "m30_confirmation": _model_point_state(m30_state),
-            "label": _linkage_label(day_state, m30_state),
-        },
+        "daily_decision": daily_decision,
+        "daily_sell_risk": daily_sell_risk,
+        "position_decision": position_decision,
+        "m30_execution": m30_execution,
+        "evidence": _model_evidence(levels),
+        "model_input": build_model_input_item(position, levels, latest_price),
     }
 
 
@@ -55,17 +77,21 @@ def format_portfolio_summary(items):
     for section in _summary_sections(items):
         lines.extend(_summary_status_lines(section, [item for item in items if item.get("section") == section]))
     lines.append("")
-    lines.append("级别联动分组：")
+    lines.append("持仓/观察决策分组：")
     labels = [
-        "当前区间套候选",
-        "日线新买点待30分钟确认",
-        "弱区间套观察",
-        "旧日线买点背景，小级别反弹",
-        "日线卖点后小级别反弹",
-        "仅客观观察，未形成级别联动",
+        "持仓风控：日线卖点当前有效",
+        "持仓风控：日线卖点转弱观察",
+        "持仓风控：日线卖点过期背景",
+        "持仓观察：暂无日线卖点",
+        "日线买点当前有效",
+        "日线买点转弱观察",
+        "日线买点过期背景",
+        "日线买点已被卖点覆盖",
+        "无日线买点",
+        "日线数据不足",
     ]
     for label in labels:
-        grouped = [item for item in items if item["linkage"]["label"] == label]
+        grouped = [item for item in items if item["position_decision"]["label"] == label]
         if not grouped:
             continue
         lines.append(f"  {label}：")
@@ -88,6 +114,40 @@ def _model_weekly(data):
     return {
         "data_range": data_range,
         "trend": _trend_text(data) if data else "无",
+    }
+
+
+def _raw_level_model(data, point_limit, bi_limit, segment_limit, zs_limit, cross_limit):
+    data = data or {}
+    indicators = data.get("indicators") or {}
+    crosses = indicators.get("crosses") or {}
+    latest_indicators = indicators.get("latest") or {}
+    recent = {
+        "buy_sell_points": _recent_items(data.get("buy_sell_points") or [], point_limit),
+        "bi": _recent_items(data.get("bi") or [], bi_limit),
+        "segments": _recent_items(data.get("segments") or [], segment_limit),
+        "zs": _recent_items(data.get("zs") or [], zs_limit),
+    }
+    if cross_limit:
+        recent["macd_crosses"] = _recent_items(crosses.get("macd") or [], cross_limit)
+        recent["kdj_crosses"] = _recent_items(crosses.get("kdj") or [], cross_limit)
+    return {
+        "data_range": data.get("data_range") or {},
+        "latest": {
+            "buy_sell_point": _latest_point(data.get("buy_sell_points") or []),
+            "bi": _latest_structure(data.get("bi") or []),
+            "segment": _latest_structure(data.get("segments") or []),
+            "zs": _latest_structure(data.get("zs") or []),
+            "indicators": {
+                "macd": latest_indicators.get("macd"),
+                "kdj": latest_indicators.get("kdj"),
+                "ma": latest_indicators.get("ma"),
+                "boll": latest_indicators.get("boll"),
+                "rsi": latest_indicators.get("rsi"),
+                "volume": latest_indicators.get("volume"),
+            },
+        },
+        "recent": recent,
     }
 
 
@@ -163,6 +223,83 @@ def _model_point_state(state):
     }
 
 
+def _model_daily_decision(data, day_state):
+    return {
+        "structure": _daily_construction_text(data),
+        "buy": _model_point_state(day_state),
+        "label": _daily_decision_label(day_state),
+    }
+
+
+def _model_daily_sell_risk(day_sell_state):
+    return {
+        "sell": _model_point_state(day_sell_state),
+        "label": _daily_sell_risk_label(day_sell_state),
+    }
+
+
+def _model_position_decision(position, daily_decision, daily_sell_risk):
+    if position["status"] == "holding":
+        sell_label = daily_sell_risk["label"]
+        if sell_label in {"日线无卖点", "日线卖点已被买点覆盖"}:
+            return {"focus": "sell", "label": "持仓观察：暂无日线卖点"}
+        return {"focus": "sell", "label": f"持仓风控：{sell_label}"}
+    return {"focus": "buy", "label": daily_decision["label"]}
+
+
+def _model_evidence(levels):
+    return {
+        "weekly": _level_evidence(
+            levels.get("K_WEEK"),
+            point_limit=3,
+            bi_limit=0,
+            segment_limit=3,
+            zs_limit=2,
+            cross_limit=0,
+        ),
+        "daily": _level_evidence(
+            levels.get("K_DAY"),
+            point_limit=5,
+            bi_limit=5,
+            segment_limit=3,
+            zs_limit=3,
+            cross_limit=5,
+        ),
+        "m30": _level_evidence(
+            levels.get("K_30M"),
+            point_limit=5,
+            bi_limit=5,
+            segment_limit=3,
+            zs_limit=2,
+            cross_limit=0,
+        ),
+    }
+
+
+def _level_evidence(data, point_limit, bi_limit, segment_limit, zs_limit, cross_limit):
+    data = data or {}
+    indicators = data.get("indicators") or {}
+    crosses = indicators.get("crosses") or {}
+    evidence = {
+        "recent_buy_sell_points": _recent_items(data.get("buy_sell_points") or [], point_limit),
+        "recent_bi": _recent_items(data.get("bi") or [], bi_limit),
+        "recent_segments": _recent_items(data.get("segments") or [], segment_limit),
+        "recent_zs": _recent_items(data.get("zs") or [], zs_limit),
+    }
+    if cross_limit:
+        evidence["recent_macd_crosses"] = _recent_items(crosses.get("macd") or [], cross_limit)
+        evidence["recent_kdj_crosses"] = _recent_items(crosses.get("kdj") or [], cross_limit)
+    return evidence
+
+
+def _model_m30_execution(m30_state):
+    return {
+        "state": _model_point_state(m30_state),
+        "hint": _m30_execution_hint(m30_state),
+        "text": _m30_execution_text(m30_state),
+    }
+
+
 def _summary_status_lines(title, items):
     lines = ["", f"{title}："]
     if not items:
@@ -189,9 +326,10 @@ def _summary_item_text(item):
     price = "无" if item.get("latest_price") is None else f"{item['latest_price']:.3f}"
     return (
         f"{item['name']}({item['symbol']}) 最新价 {price}；"
-        f"{item['linkage']['label']}；"
-        f"日线 {item['linkage']['daily_buy']['text']}；"
-        f"30分钟 {item['linkage']['m30_confirmation']['text']}"
+        f"{item['position_decision']['label']}；"
+        f"日线 {item['daily_decision']['buy']['text']}；"
+        f"卖点 {item['daily_sell_risk']['sell']['text']}；"
+        f"30分钟执行 {item['m30_execution']['hint']}"
     )
 
 
@@ -261,6 +399,16 @@ def _latest_structure(items):
     return max(items, key=lambda item: item.get("end_time") or item.get("begin_time") or "")
 
 
+def _recent_items(items, limit):
+    if limit <= 0 or not items:
+        return []
+    return sorted(items, key=_item_sort_time)[-limit:]
+
+
+def _item_sort_time(item):
+    return item.get("time") or item.get("end_time") or item.get("begin_time") or ""
+
+
 def _structure_trend_text(name, item):
     direction = TREND_LABELS.get(item.get("direction"), item.get("direction", "未知"))
     begin = item.get("begin_time")
@@ -300,7 +448,7 @@ def _detail_lines(levels, limit=5):
     lines = ["详细报告："]
     weekly = levels.get("K_WEEK")
     lines.extend(_weekly_detail_lines(weekly))
-    lines.extend(_level_linkage_lines(levels.get("K_DAY"), levels.get("K_30M")))
+    lines.extend(_decision_execution_lines(levels.get("K_DAY"), levels.get("K_30M")))
     for level in ("K_DAY", "K_30M"):
         lines.extend(_decision_level_detail_lines(level, levels.get(level), limit))
     return lines
@@ -382,14 +530,17 @@ def _structure_detail_lines(data):
     return ["    结构：", *items]
 
 
-def _level_linkage_lines(day_data, m30_data):
-    lines = ["  级别联动："]
+def _decision_execution_lines(day_data, m30_data):
+    lines = ["  中长线决策："]
     lines.append(f"    日线结构：{_daily_construction_text(day_data)}")
     day_state = _point_state(day_data, "日线", current_days=10, weak_days=20)
+    day_sell_state = _sell_point_state(day_data, "日线", current_days=10, weak_days=20)
     m30_state = _point_state(m30_data, "30分钟", current_days=3, weak_days=5)
-    lines.append(f"    日线买点新鲜度：{_point_state_text(day_state)}")
-    lines.append(f"    30分钟确认：{_m30_confirmation_text(m30_state)}")
-    lines.append(f"    联动标签：{_linkage_label(day_state, m30_state)}")
+    lines.append(f"    日线买点：{_point_state_text(day_state)}")
+    lines.append(f"    日线卖点：{_point_state_text(day_sell_state)}")
+    lines.append(f"    30分钟执行：{_m30_execution_text(m30_state)}")
+    lines.append(f"    买点标签：{_daily_decision_label(day_state)}")
+    lines.append(f"    卖点标签：{_daily_sell_risk_label(day_sell_state)}")
     return lines
 
 
@@ -412,22 +563,30 @@ def _daily_construction_text(data):
 
 
 def _point_state(data, level_name, current_days, weak_days):
+    return _directional_point_state(data, level_name, current_days, weak_days, is_buy=True)
+
+
+def _sell_point_state(data, level_name, current_days, weak_days):
+    return _directional_point_state(data, level_name, current_days, weak_days, is_buy=False)
+
+
+def _directional_point_state(data, level_name, current_days, weak_days, is_buy):
     if not data:
         return {"status": "no_data", "level": level_name}
 
     points = data.get("buy_sell_points") or []
     latest_point = _latest_point(points)
-    latest_buy = _latest_point([point for point in points if point.get("is_buy")])
+    latest_selected = _latest_point([point for point in points if point.get("is_buy") is is_buy])
     end_time = (data.get("data_range") or {}).get("end")
-    age_days = _days_between(latest_buy.get("time") if latest_buy else None, end_time)
+    age_days = _days_between(latest_selected.get("time") if latest_selected else None, end_time)
 
-    if latest_buy is None:
-        return {"status": "no_buy", "level": level_name, "latest_point": latest_point}
-    if latest_point and not latest_point.get("is_buy") and latest_point.get("time") > latest_buy.get("time"):
+    if latest_selected is None:
+        return {"status": "no_buy" if is_buy else "no_sell", "level": level_name, "latest_point": latest_point}
+    if latest_point and latest_point.get("is_buy") is not is_buy and latest_point.get("time") > latest_selected.get("time"):
         return {
             "status": "invalidated",
             "level": level_name,
-            "point": latest_buy,
+            "point": latest_selected,
             "latest_point": latest_point,
             "age_days": age_days,
         }
@@ -442,7 +601,7 @@ def _point_state(data, level_name, current_days, weak_days):
     return {
         "status": "buy",
         "level": level_name,
-        "point": latest_buy,
+        "point": latest_selected,
         "latest_point": latest_point,
         "age_days": age_days,
         "freshness": freshness,
@@ -461,11 +620,13 @@ def _point_state_text(state):
         return "无数据"
     if status == "no_buy":
         return "无最新买点"
+    if status == "no_sell":
+        return "无最新卖点"
     if status == "invalidated":
         point = state["point"]
         latest = state["latest_point"]
         return (
-            f"买 {point['type']}（{point['time']}），已被后续"
+            f"{'买' if point['is_buy'] else '卖'} {point['type']}（{point['time']}），已被后续"
             f"{'买' if latest['is_buy'] else '卖'} {latest['type']}（{latest['time']}）覆盖"
         )
     if status != "buy":
@@ -473,26 +634,72 @@ def _point_state_text(state):
     return f"{_point_text(state['point'])}，距最新{state['level']} {_age_text(state.get('age_days'))}，{_freshness_text(state.get('freshness'))}"
 
 
-def _m30_confirmation_text(state):
-    if state.get("status") != "buy":
-        return _point_state_text(state)
-    return f"{_point_text(state['point'])}，距最新{state['level']} {_age_text(state.get('age_days'))}，{_freshness_text(state.get('freshness'))}"
+def _daily_decision_label(day_state):
+    status = day_state.get("status")
+    if status == "no_data":
+        return "日线数据不足"
+    if status == "no_buy":
+        return "无日线买点"
+    if status == "invalidated":
+        return "日线买点已被卖点覆盖"
+    if status != "buy":
+        return "日线数据不足"
+    freshness = day_state.get("freshness")
+    if freshness == "current":
+        return "日线买点当前有效"
+    if freshness == "weak":
+        return "日线买点转弱观察"
+    if freshness == "old":
+        return "日线买点过期背景"
+    return "日线买点时间未知"
 
 
-def _linkage_label(day_state, m30_state):
-    day_status = day_state.get("status")
-    m30_is_current_buy = m30_state.get("status") == "buy" and m30_state.get("freshness") == "current"
-    if day_status == "buy" and day_state.get("freshness") == "current" and m30_is_current_buy:
-        return "当前区间套候选"
-    if day_status == "buy" and day_state.get("freshness") == "current":
-        return "日线新买点待30分钟确认"
-    if day_status == "buy" and day_state.get("freshness") == "weak" and m30_is_current_buy:
-        return "弱区间套观察"
-    if day_status == "buy" and day_state.get("freshness") == "old" and m30_is_current_buy:
-        return "旧日线买点背景，小级别反弹"
-    if day_status == "invalidated" and m30_is_current_buy:
-        return "日线卖点后小级别反弹"
-    return "仅客观观察，未形成级别联动"
+def _daily_sell_risk_label(day_sell_state):
+    status = day_sell_state.get("status")
+    if status == "no_data":
+        return "日线数据不足"
+    if status == "no_sell":
+        return "日线无卖点"
+    if status == "invalidated":
+        return "日线卖点已被买点覆盖"
+    if status != "buy":
+        return "日线数据不足"
+    freshness = day_sell_state.get("freshness")
+    if freshness == "current":
+        return "日线卖点当前有效"
+    if freshness == "weak":
+        return "日线卖点转弱观察"
+    if freshness == "old":
+        return "日线卖点过期背景"
+    return "日线卖点时间未知"
+
+
+def _m30_execution_text(state):
+    base = _point_state_text(state)
+    return f"{base}；{_m30_execution_hint(state)}"
+
+
+def _m30_execution_hint(state):
+    status = state.get("status")
+    latest_point = state.get("latest_point")
+    if status == "no_data":
+        return "30分钟无数据，次日按日线计划观察"
+    if status == "invalidated":
+        return "30分钟买点已被卖点覆盖，避免追高"
+    if status == "no_buy":
+        if latest_point and not latest_point.get("is_buy"):
+            return "30分钟回落中，可等回踩低吸"
+        return "30分钟尚未转强，适合观察挂低"
+    if status != "buy":
+        return "30分钟状态未知，次日需重看"
+    freshness = state.get("freshness")
+    if freshness == "current":
+        return "30分钟买点过夜，仅作参考，次日需重看"
+    if freshness == "weak":
+        return "30分钟已反弹，避免追高"
+    if freshness == "old":
+        return "30分钟买点已过期，次日需重看"
+    return "30分钟状态未知，次日需重看"
 
 
 def _point_text(point):

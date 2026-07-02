@@ -681,7 +681,7 @@ def test_portfolio_analyze_saves_model_json_and_summary_to_dated_output_files(tm
     assert "平安银行" in summary
 
 
-def test_portfolio_analyze_summary_includes_linkage_groups(tmp_path):
+def test_portfolio_analyze_summary_includes_position_decision_groups(tmp_path):
     positions = [
         {"symbol": "002536", "name": "飞龙股份", "quantity": 400, "cost_price": 41.343, "status": "holding"},
     ]
@@ -710,11 +710,20 @@ def test_portfolio_analyze_summary_includes_linkage_groups(tmp_path):
 
     assert result.exit_code == 0, result.output
     model = json.loads(next(tmp_path.glob("portfolio_model_*.json")).read_text(encoding="utf-8"))
-    assert model["items"][0]["weekly"]["trend"] == "线段向上（2026/04/02 至 2026/06/19）"
-    assert model["items"][0]["daily"]["latest_point"]["text"] == "买 2（2026/06/23）"
-    assert model["items"][0]["linkage"]["label"] == "日线新买点待30分钟确认"
+    assert "weekly" not in model["items"][0]
+    assert "daily_decision" not in model["items"][0]
+    assert "daily_sell_risk" not in model["items"][0]
+    assert "position_decision" not in model["items"][0]
+    assert "m30_execution" not in model["items"][0]
+    assert model["items"][0]["levels"]["K_DAY"]["recent"]["buy_sell_points"] == [
+        {"time": "2026/06/23", "is_buy": True, "type": "2"}
+    ]
+    assert model["items"][0]["levels"]["K_WEEK"]["recent"]["segments"] == [
+        {"direction": "UP", "begin_time": "2026/04/02", "end_time": "2026/06/19"}
+    ]
     summary = next(tmp_path.glob("portfolio_summary_*.txt")).read_text(encoding="utf-8")
-    assert "日线新买点待30分钟确认" in summary
+    assert "持仓/观察决策分组" in summary
+    assert "持仓观察：暂无日线卖点" in summary
     assert "飞龙股份" in summary
 
 

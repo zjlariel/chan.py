@@ -483,8 +483,9 @@ def _write_analysis_outputs(items, output_dir, prefix):
     generated_on = date.today().isoformat()
     model_path = output_dir / f"{prefix}_model_{generated_on}.json"
     summary_path = output_dir / f"{prefix}_summary_{generated_on}.txt"
+    model_items = [item["model_input"] for item in items]
     model_path.write_text(
-        json.dumps({"generated_on": generated_on, "items": items}, ensure_ascii=False, indent=2),
+        json.dumps({"generated_on": generated_on, "items": model_items}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     summary_path.write_text(format_portfolio_summary(items), encoding="utf-8")
@@ -504,8 +505,10 @@ def _portfolio_analysis_model_items(positions, cache_path, refresh, ad_hoc_stock
             levels, latest_price = _portfolio_analysis_levels(position["symbol"], cache_path, refresh, autype=autype)
             item = build_model_item(position, levels, latest_price)
             item["section"] = title
+            item["model_input"]["section"] = title
             if ad_hoc_stock and status == "watching":
                 item["section"] = "临时观察股"
+                item["model_input"]["section"] = "临时观察股"
             items.append(item)
     return items
 
