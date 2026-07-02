@@ -73,7 +73,8 @@ chanpy cache update [OPTIONS]
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
 | `--mode` | 刷新模式：`auto`、`live` 或 `eod` | `auto` |
-| `--codes` | 逗号分隔的股票代码 | 必填 |
+| `--codes` | 逗号分隔的股票或 ETF 代码 | 关闭 |
+| `--all` | 更新 `tracked_stocks` 表中全部启用股票 | 关闭 |
 | `--all-etfs` | 更新 `tracked_etfs` 表中全部启用 ETF | 关闭 |
 | `--full` | 从完整保留窗口重新拉取，而非增量更新 | 关闭 |
 | `--cache-path` | SQLite 缓存文件路径 | `.chanpy/cache.sqlite3` |
@@ -151,16 +152,40 @@ chanpy etf list
 chanpy etf set --code 513130 --name 恒生科技ETF --quantity 0 --category 港股科技 --tracking-index 恒生科技指数
 chanpy etf set --code 159995 --name 芯片ETF --quantity 10000 --available 10000 --cost-price 1.250 --category 半导体
 chanpy etf delete --code 513130
+chanpy etf analyze
+chanpy etf analyze --refresh
+chanpy etf analyze --code 159530 --output-dir output
 ```
 
 `etf delete --code <代码>` 是软删除，只会将 `tracked_etfs.active` 标记为 `0`，不会物理删除历史记录、成本价、分类和备注。
 
-当前 ETF 命令只负责跟踪表管理，不接入 `portfolio analyze` 和 `cache update --all`。ETF 行情与缠论分析需要单独验证数据源支持后再扩展。
-
-ETF K 线可以通过缓存命令按代码刷新。场内 ETF 支持裸码或带交易所前缀，`15` 开头默认深市，`51`、`56`、`58` 开头默认沪市；ETF 默认使用不复权口径。
+ETF 命令负责跟踪表管理和批量缠论跟踪；ETF 的 K 线刷新通过 `cache update` 完成，ETF 池的批量分析通过 `etf analyze` 完成。场内 ETF 支持裸码或带交易所前缀，`15` 开头默认深市，`51`、`56`、`58` 开头默认沪市；ETF 默认使用不复权口径。
 
 ```bash
 chanpy cache update --codes 513130 --mode eod
 chanpy cache update --codes 159530 --mode eod
 chanpy cache update --all-etfs --mode eod
+```
+
+`etf analyze` 使用周线作为趋势背景、日线作为决策级别、30 分钟作为确认级别；不使用 5 分钟信号。它会读取 `tracked_etfs` 表里的全部启用 ETF，默认保存两份文件：`output/etf_model_YYYY-MM-DD.json` 给大模型做结构化分析，`output/etf_summary_YYYY-MM-DD.txt` 给人快速扫盘。`--refresh` 会先按 `auto` 模式刷新每只 ETF 的分析级别缓存；`--code <代码>` 可以只分析某一只已跟踪 ETF。
+
+```bash
+chanpy etf analyze
+chanpy etf analyze --refresh
+chanpy etf analyze --code 159530 --output-dir output
+```
+
+如果要每天跟踪整个 ETF 池，推荐流程是先刷新全部启用 ETF，再一键生成 ETF 池的缠论跟踪报告：
+
+```bash
+chanpy cache update --all-etfs --mode eod --cache-path .chanpy/cache.sqlite3
+chanpy etf analyze --cache-path .chanpy/cache.sqlite3 --output-dir output
+```
+
+需要给单只 ETF 额外出图或导出底层缠论 JSON 时，再使用通用 `analyze` 命令：
+
+```bash
+chanpy analyze --data-src cache --code 513130
+chanpy analyze --data-src cache --code 159530 --kl-type K_WEEK,K_DAY,K_30M
+chanpy analyze --data-src cache --code 518880 --json --figure --output-dir output
 ```

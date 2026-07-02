@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from Common.CEnum import DATA_SRC, KL_TYPE
+from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
 from cli import DEFAULT_LEVELS, PORTFOLIO_LEVELS, _portfolio_analysis_levels, _stock_output_stem, app
 from DataAPI.CacheStore import CacheStore
 
@@ -531,6 +531,90 @@ def test_etf_delete_reports_missing_symbol(tmp_path):
 
     assert result.exit_code != 0
     assert "未找到跟踪 ETF：513130" in result.output
+
+
+def test_etf_analyze_outputs_all_active_etfs_to_dated_files(tmp_path):
+    positions = [
+        {"symbol": "159530", "name": "机器人ETF易方达", "quantity": 0, "cost_price": None, "status": "watching", "category": "机器人"},
+        {"symbol": "518880", "name": "黄金ETF华安", "quantity": 1000, "cost_price": 8.0, "status": "holding", "category": "黄金"},
+    ]
+    levels = {"K_WEEK": {"buy_sell_points": []}, "K_DAY": {"buy_sell_points": []}, "K_30M": {"buy_sell_points": []}}
+    with (
+        patch("cli.EtfStore") as mock_store,
+        patch("cli._portfolio_analysis_levels", return_value=(levels, 1.23)) as mock_levels,
+        patch("cli.date") as mock_date,
+    ):
+        mock_store.return_value.list_positions.return_value = positions
+        mock_date.today.return_value.isoformat.return_value = "2026-07-02"
+
+        result = runner.invoke(
+            app,
+            [
+                "etf",
+                "analyze",
+                "--cache-path",
+                str(tmp_path / "cache.sqlite3"),
+                "--output-dir",
+                str(tmp_path),
+            ],
+        )
+
+    model_path = tmp_path / "etf_model_2026-07-02.json"
+    summary_path = tmp_path / "etf_summary_2026-07-02.txt"
+    assert result.exit_code == 0, result.output
+    assert f"模型输入已保存：{model_path}" in result.output
+    assert f"摘要已保存：{summary_path}" in result.output
+    model = json.loads(model_path.read_text(encoding="utf-8"))
+    assert model["generated_on"] == "2026-07-02"
+    assert [item["symbol"] for item in model["items"]] == ["518880", "159530"]
+    summary = summary_path.read_text(encoding="utf-8")
+    assert "持仓ETF" in summary
+    assert "观察ETF" in summary
+    assert mock_levels.call_count == 2
+
+
+def test_etf_analyze_code_limits_analysis_to_one_tracked_etf(tmp_path):
+    positions = [
+        {"symbol": "159530", "name": "机器人ETF易方达", "quantity": 0, "cost_price": None, "status": "watching"},
+        {"symbol": "518880", "name": "黄金ETF华安", "quantity": 0, "cost_price": None, "status": "watching"},
+    ]
+    levels = {"K_WEEK": {"buy_sell_points": []}, "K_DAY": {"buy_sell_points": []}, "K_30M": {"buy_sell_points": []}}
+    with patch("cli.EtfStore") as mock_store, patch("cli._portfolio_analysis_levels", return_value=(levels, 1.23)) as mock_levels:
+        mock_store.return_value.list_positions.return_value = positions
+
+        result = runner.invoke(
+            app,
+            [
+                "etf",
+                "analyze",
+                "--code",
+                "sh.518880",
+                "--refresh",
+                "--cache-path",
+                str(tmp_path / "cache.sqlite3"),
+                "--output-dir",
+                str(tmp_path),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    summary = next(tmp_path.glob("etf_summary_*.txt")).read_text(encoding="utf-8")
+    assert "黄金ETF华安" in summary
+    assert "机器人ETF易方达" not in summary
+    assert mock_levels.call_args.args[0] == "518880"
+    assert mock_levels.call_args.args[2] is True
+    assert mock_levels.call_args.kwargs["autype"] == AUTYPE.NONE
+
+
+def test_etf_analyze_reports_empty_pool(tmp_path):
+    with patch("cli.EtfStore") as mock_store:
+        mock_store.return_value.list_positions.return_value = []
+
+        result = runner.invoke(app, ["etf", "analyze", "--cache-path", str(tmp_path / "cache.sqlite3"), "--output-dir", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "没有跟踪 ETF" in result.output
+    assert list(tmp_path.glob("etf_*.txt")) == []
 
 
 def test_portfolio_analyze_outputs_holding_and_watch_sections(tmp_path):

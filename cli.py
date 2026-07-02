@@ -430,6 +430,25 @@ def etf_list(
         )
 
 
+@etf_app.command(name="analyze", help="批量分析持仓与观察 ETF")
+def etf_analyze(
+    code: Annotated[Optional[str], typer.Option("--code", help="仅分析指定的已跟踪 ETF")] = None,
+    refresh: Annotated[bool, typer.Option("--refresh", help="先按 auto 模式刷新缓存")] = False,
+    cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
+    output_dir: Annotated[Path, typer.Option("--output-dir", help="分析报告输出目录")] = Path("output"),
+):
+    positions = EtfStore(cache_path).list_positions()
+    if code:
+        normalized_code = _normalize_etf_code(code)
+        positions = [position for position in positions if position["symbol"] == normalized_code]
+    if not positions:
+        typer.echo("没有跟踪 ETF")
+        return
+    with CBaoStock.keep_alive():
+        items = _portfolio_analysis_model_items(positions, cache_path, refresh, section_titles=("持仓ETF", "观察ETF"), autype=AUTYPE.NONE)
+    _write_analysis_outputs(items, output_dir, "etf")
+
+
 @portfolio_app.command(name="analyze", help="分析持仓卖点与观察股买点")
 def portfolio_analyze(
     code: Annotated[Optional[str], typer.Option("--code", help="仅分析指定的已跟踪股票")] = None,
@@ -456,10 +475,14 @@ def portfolio_analyze(
         return
     with CBaoStock.keep_alive():
         items = _portfolio_analysis_model_items(positions, cache_path, refresh, ad_hoc_stock)
+    _write_analysis_outputs(items, output_dir, "portfolio")
+
+
+def _write_analysis_outputs(items, output_dir, prefix):
     output_dir.mkdir(parents=True, exist_ok=True)
     generated_on = date.today().isoformat()
-    model_path = output_dir / f"portfolio_model_{generated_on}.json"
-    summary_path = output_dir / f"portfolio_summary_{generated_on}.txt"
+    model_path = output_dir / f"{prefix}_model_{generated_on}.json"
+    summary_path = output_dir / f"{prefix}_summary_{generated_on}.txt"
     model_path.write_text(
         json.dumps({"generated_on": generated_on, "items": items}, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -469,16 +492,16 @@ def portfolio_analyze(
     typer.echo(f"摘要已保存：{summary_path}")
 
 
-def _portfolio_analysis_model_items(positions, cache_path, refresh, ad_hoc_stock=False):
+def _portfolio_analysis_model_items(positions, cache_path, refresh, ad_hoc_stock=False, section_titles=("持仓股", "观察股"), autype=AUTYPE.QFQ):
     items = []
-    for title, status in (("持仓股", "holding"), ("观察股", "watching")):
+    for title, status in ((section_titles[0], "holding"), (section_titles[1], "watching")):
         selected = [position for position in positions if position["status"] == status]
         if not selected:
             continue
         if ad_hoc_stock and status == "watching":
             selected = [{**position, "status": "watching", "group_name": "临时观察股"} for position in selected]
         for position in selected:
-            levels, latest_price = _portfolio_analysis_levels(position["symbol"], cache_path, refresh)
+            levels, latest_price = _portfolio_analysis_levels(position["symbol"], cache_path, refresh, autype=autype)
             item = build_model_item(position, levels, latest_price)
             item["section"] = title
             if ad_hoc_stock and status == "watching":
@@ -501,16 +524,16 @@ def _normalize_etf_code(code):
     return normalized
 
 
-def _portfolio_analysis_levels(code, cache_path, refresh):
+def _portfolio_analysis_levels(code, cache_path, refresh, autype=AUTYPE.QFQ):
     begin_time = _begin_time(PORTFOLIO_LEVELS, None, date.today())
     if refresh:
         for level in PORTFOLIO_LEVELS:
-            CCache(code, level, cache_path=cache_path, mode="auto").refresh()
+            CCache(code, level, autype=autype, cache_path=cache_path, mode="auto").refresh()
 
     levels = {}
     latest_price = None
     for level in PORTFOLIO_LEVELS:
-        cache = CCache(code, level, begin_time[level], None, AUTYPE.QFQ, cache_path=cache_path, mode="eod")
+        cache = CCache(code, level, begin_time[level], None, autype, cache_path=cache_path, mode="eod")
         bars = list(cache.get_kl_data())
         if bars and (latest_price is None or level == KL_TYPE.K_30M):
             latest_price = bars[-1].close
@@ -521,7 +544,7 @@ def _portfolio_analysis_levels(code, cache_path, refresh):
             data_src=DATA_SRC.CACHE,
             lv_list=[level],
             config=_default_chan_config(cal_kdj=level != KL_TYPE.K_WEEK),
-            autype=AUTYPE.QFQ,
+            autype=autype,
         )
         levels[level.name] = build_document(code, "cache", {level: chan[level]})["levels"][level.name]
     return levels, latest_price
