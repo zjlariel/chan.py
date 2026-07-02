@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -9,6 +9,8 @@ from KLine.KLine_Unit import CKLine_Unit
 
 
 class CacheStore:
+    COVERAGE_EDGE_TOLERANCE_DAYS = 14
+
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -144,6 +146,22 @@ class CacheStore:
             ).fetchone()
         return row["timestamp"] if row and row["timestamp"] else None
 
+    def timestamp_range(self, symbol, k_type, begin_date=None, end_date=None):
+        clauses = ["symbol = ?", "k_type = ?"]
+        params = [symbol, k_type.name]
+        if begin_date:
+            clauses.append("timestamp >= ?")
+            params.append(self._range_start(begin_date))
+        if end_date:
+            clauses.append("timestamp <= ?")
+            params.append(self._range_end(end_date))
+        query = f"SELECT MIN(timestamp) AS first_timestamp, MAX(timestamp) AS last_timestamp FROM bars WHERE {' AND '.join(clauses)}"
+        with self._connect() as connection:
+            row = connection.execute(query, params).fetchone()
+        if not row or not row["first_timestamp"] or not row["last_timestamp"]:
+            return None
+        return row["first_timestamp"], row["last_timestamp"]
+
     def prune_before(self, symbol, k_type, start_date):
         with self._connect() as connection:
             result = connection.execute(
@@ -162,7 +180,17 @@ class CacheStore:
                 """,
                 (symbol, k_type.name, begin_date[:10], end_date[:10]),
             ).fetchone()
-        return row is not None
+        if row is None:
+            return False
+        actual_range = self.timestamp_range(symbol, k_type, begin_date, end_date)
+        if actual_range is None:
+            return False
+        requested_start = datetime.fromisoformat(self._range_start(begin_date))
+        requested_end = datetime.fromisoformat(self._range_end(end_date))
+        actual_start = datetime.fromisoformat(actual_range[0])
+        actual_end = datetime.fromisoformat(actual_range[1])
+        tolerance = timedelta(days=self.COVERAGE_EDGE_TOLERANCE_DAYS)
+        return actual_start <= requested_start + tolerance and actual_end >= requested_end - tolerance
 
     def upsert_stock_name(self, symbol, name, source):
         name = str(name).strip()

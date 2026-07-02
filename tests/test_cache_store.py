@@ -6,10 +6,10 @@ from DataAPI.CacheStore import CacheStore
 from KLine.KLine_Unit import CKLine_Unit
 
 
-def make_bar(day, hour, minute, close):
+def make_bar(day, hour, minute, close, year=2026, month=6):
     return CKLine_Unit(
         {
-            DATA_FIELD.FIELD_TIME: CTime(2026, 6, day, hour, minute, auto=False),
+            DATA_FIELD.FIELD_TIME: CTime(year, month, day, hour, minute, auto=False),
             DATA_FIELD.FIELD_OPEN: close - 0.1,
             DATA_FIELD.FIELD_HIGH: close + 0.1,
             DATA_FIELD.FIELD_LOW: close - 0.2,
@@ -38,11 +38,31 @@ def test_upserts_and_reads_ordered_bars(tmp_path: Path):
 
 def test_records_coverage_ranges(tmp_path: Path):
     store = CacheStore(tmp_path / "cache.sqlite3")
+    store.upsert_bars(
+        "sh600000",
+        KL_TYPE.K_DAY,
+        [make_bar(1, 0, 0, 9.1), make_bar(18, 0, 0, 9.2)],
+        "baostock",
+    )
 
-    store.mark_covered("sh600000", KL_TYPE.K_DAY, "2023-01-01", "2026-06-18", "baostock")
+    store.mark_covered("sh600000", KL_TYPE.K_DAY, "2026-06-01", "2026-06-18", "baostock")
 
-    assert store.covers("sh600000", KL_TYPE.K_DAY, "2024-01-01", "2026-06-18")
-    assert not store.covers("sh600000", KL_TYPE.K_DAY, "2022-12-31", "2026-06-18")
+    assert store.covers("sh600000", KL_TYPE.K_DAY, "2026-06-01", "2026-06-18")
+    assert not store.covers("sh600000", KL_TYPE.K_DAY, "2026-05-31", "2026-06-18")
+
+
+def test_coverage_requires_actual_bars_to_span_requested_range(tmp_path: Path):
+    store = CacheStore(tmp_path / "cache.sqlite3")
+    store.upsert_bars(
+        "sh515030",
+        KL_TYPE.K_DAY,
+        [make_bar(5, 0, 0, 1.0, month=1), make_bar(1, 0, 0, 1.1, month=7)],
+        "baostock",
+    )
+    store.mark_covered("sh515030", KL_TYPE.K_DAY, "2023-03-20", "2026-07-02", "baostock")
+
+    assert not store.covers("sh515030", KL_TYPE.K_DAY, "2023-03-20", "2026-07-02")
+    assert store.covers("sh515030", KL_TYPE.K_DAY, "2026-01-05", "2026-07-02")
 
 
 def test_prunes_old_bars_and_reports_latest_timestamp(tmp_path: Path):

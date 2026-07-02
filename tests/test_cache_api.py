@@ -9,10 +9,12 @@ from DataAPI.CacheStore import CacheStore
 from KLine.KLine_Unit import CKLine_Unit
 
 
-def make_bar(close=9.1):
+def make_bar(close=9.1, time=None):
+    if time is None:
+        time = CTime(2026, 6, 18, 10, 0, auto=False)
     return CKLine_Unit(
         {
-            DATA_FIELD.FIELD_TIME: CTime(2026, 6, 18, 10, 0, auto=False),
+            DATA_FIELD.FIELD_TIME: time,
             DATA_FIELD.FIELD_OPEN: close - 0.1,
             DATA_FIELD.FIELD_HIGH: close + 0.1,
             DATA_FIELD.FIELD_LOW: close - 0.2,
@@ -36,6 +38,34 @@ class FakeSina:
 class FakeBao(FakeSina):
     calls = []
     name = "\u6d66\u53d1\u94f6\u884c"
+
+
+class FakeEastMoney(FakeSina):
+    calls = []
+    name = "ETF"
+
+
+class PartialBao(FakeSina):
+    calls = []
+
+    def get_kl_data(self):
+        yield make_bar(1.0, CTime(2026, 1, 5, 0, 0, auto=False))
+        yield make_bar(1.1, CTime(2026, 7, 1, 0, 0, auto=False))
+
+
+class RangeBao(FakeSina):
+    calls = []
+
+    def __init__(self, code, k_type, begin_date, end_date, autype):
+        super().__init__(code, k_type, begin_date, end_date, autype)
+        self.begin_date = begin_date
+        self.end_date = end_date
+
+    def get_kl_data(self):
+        begin = datetime.fromisoformat(self.begin_date[:10])
+        end = datetime.fromisoformat(self.end_date[:10])
+        yield make_bar(1.0, CTime(begin.year, begin.month, begin.day, 0, 0, auto=False))
+        yield make_bar(1.1, CTime(end.year, end.month, end.day, 0, 0, auto=False))
 
 
 def build_api(tmp_path: Path, k_type, now):
@@ -84,9 +114,10 @@ def test_end_of_day_cache_miss_fetches_baostock(tmp_path):
     assert FakeSina.calls == []
 
 
-def test_cache_accepts_bare_etf_symbols_and_fetches_from_baostock(tmp_path):
+def test_cache_accepts_bare_etf_symbols_and_fetches_daily_from_eastmoney(tmp_path):
     FakeSina.calls = []
     FakeBao.calls = []
+    FakeEastMoney.calls = []
     api = CCache(
         "513130",
         KL_TYPE.K_DAY,
@@ -95,14 +126,15 @@ def test_cache_accepts_bare_etf_symbols_and_fetches_from_baostock(tmp_path):
         AUTYPE.NONE,
         cache_path=tmp_path / "cache.sqlite3",
         now=datetime(2026, 6, 18, 19, 0),
-        provider_classes={"sina": FakeSina, "baostock": FakeBao},
+        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney},
         mode="eod",
     )
 
     list(api.get_kl_data())
 
     assert api.symbol == "sh513130"
-    assert FakeBao.calls[0][:4] == ("sh.513130", KL_TYPE.K_DAY, "2026-06-18", "2026-06-18")
+    assert FakeEastMoney.calls[0][:4] == ("513130", KL_TYPE.K_DAY, "2026-06-18", "2026-06-18")
+    assert FakeBao.calls == []
 
 
 def test_refresh_persists_provider_stock_name(tmp_path):
@@ -145,6 +177,7 @@ def test_end_of_day_cache_uses_qfq_when_autype_is_omitted(tmp_path):
 def test_etf_cache_uses_none_autype_when_autype_is_omitted(tmp_path):
     FakeSina.calls = []
     FakeBao.calls = []
+    FakeEastMoney.calls = []
     api = CCache(
         "513130",
         KL_TYPE.K_DAY,
@@ -152,18 +185,98 @@ def test_etf_cache_uses_none_autype_when_autype_is_omitted(tmp_path):
         "2026-06-18",
         cache_path=tmp_path / "cache.sqlite3",
         now=datetime(2026, 6, 18, 19, 0),
-        provider_classes={"sina": FakeSina, "baostock": FakeBao},
+        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney},
         mode="eod",
     )
 
     list(api.get_kl_data())
 
-    assert FakeBao.calls[0][-1] == AUTYPE.NONE
+    assert FakeEastMoney.calls[0][-1] == AUTYPE.NONE
+
+
+def test_etf_weekly_eod_cache_uses_eastmoney(tmp_path):
+    FakeBao.calls = []
+    FakeEastMoney.calls = []
+    api = CCache(
+        "515030",
+        KL_TYPE.K_WEEK,
+        "2023-03-20",
+        "2026-07-02",
+        cache_path=tmp_path / "cache.sqlite3",
+        now=datetime(2026, 7, 2, 19, 0),
+        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney},
+        mode="eod",
+    )
+
+    api.refresh()
+
+    assert FakeEastMoney.calls[0][:4] == ("515030", KL_TYPE.K_WEEK, "2023-03-20", "2026-07-02")
+    assert FakeBao.calls == []
+
+
+def test_etf_minute_eod_cache_keeps_using_baostock(tmp_path):
+    FakeBao.calls = []
+    FakeEastMoney.calls = []
+    api = CCache(
+        "515030",
+        KL_TYPE.K_30M,
+        "2026-06-01",
+        "2026-06-18",
+        cache_path=tmp_path / "cache.sqlite3",
+        now=datetime(2026, 6, 18, 19, 0),
+        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": FakeEastMoney},
+        mode="eod",
+    )
+
+    api.refresh()
+
+    assert FakeBao.calls[0][:4] == ("sh.515030", KL_TYPE.K_30M, "2026-06-01", "2026-06-18")
+    assert FakeEastMoney.calls == []
+
+
+def test_refresh_marks_coverage_from_actual_returned_bar_range(tmp_path):
+    PartialBao.calls = []
+    api = CCache(
+        "515030",
+        KL_TYPE.K_DAY,
+        "2023-03-20",
+        "2026-07-02",
+        AUTYPE.NONE,
+        cache_path=tmp_path / "cache.sqlite3",
+        now=datetime(2026, 7, 2, 19, 0),
+        provider_classes={"sina": FakeSina, "baostock": FakeBao, "eastmoney": PartialBao},
+        mode="eod",
+    )
+
+    api.refresh()
+
+    assert not api.store.covers(api.symbol, KL_TYPE.K_DAY, "2023-03-20", "2026-07-02")
+    assert api.store.covers(api.symbol, KL_TYPE.K_DAY, "2026-01-05", "2026-07-01")
+
+
+def test_auto_refresh_does_not_overstate_coverage_when_provider_returns_partial_range(tmp_path):
+    PartialBao.calls = []
+    api = CCache(
+        "515030",
+        KL_TYPE.K_DAY,
+        "2023-03-20",
+        "2026-07-02",
+        AUTYPE.NONE,
+        cache_path=tmp_path / "cache.sqlite3",
+        now=datetime(2026, 7, 2, 19, 0),
+        provider_classes={"sina": FakeSina, "baostock": PartialBao},
+        mode="auto",
+    )
+
+    api.refresh()
+
+    assert not api.store.covers(api.symbol, KL_TYPE.K_DAY, "2023-03-20", "2026-07-02")
+    assert api.store.covers(api.symbol, KL_TYPE.K_DAY, "2026-01-05", "2026-07-01")
 
 
 def test_subsequent_refresh_uses_a_short_overlap_instead_of_full_window(tmp_path):
     FakeSina.calls = []
-    FakeBao.calls = []
+    RangeBao.calls = []
     api = CCache(
         "002460",
         KL_TYPE.K_DAY,
@@ -171,15 +284,15 @@ def test_subsequent_refresh_uses_a_short_overlap_instead_of_full_window(tmp_path
         "2026-06-18",
         cache_path=tmp_path / "cache.sqlite3",
         now=datetime(2026, 6, 18, 19, 0),
-        provider_classes={"sina": FakeSina, "baostock": FakeBao},
+        provider_classes={"sina": FakeSina, "baostock": RangeBao},
         mode="eod",
     )
 
     api.refresh()
     api.refresh()
 
-    assert FakeBao.calls[0][2:4] == ("2026-06-01", "2026-06-18")
-    assert FakeBao.calls[1][2:4] == ("2026-06-15", "2026-06-18")
+    assert RangeBao.calls[0][2:4] == ("2026-06-01", "2026-06-18")
+    assert RangeBao.calls[1][2:4] == ("2026-06-15", "2026-06-18")
 
 
 def test_auto_refresh_uses_baostock_for_history_and_sina_for_today(tmp_path):

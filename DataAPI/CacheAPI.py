@@ -84,7 +84,9 @@ class CCache(CCommonStockApi):
 
         if refresh_counts:
             self.store.prune_before(self.symbol, self.k_type, begin_date)
-            self.store.replace_coverage(self.symbol, self.k_type, begin_date, end_date, "auto")
+            actual_range = self.store.timestamp_range(self.symbol, self.k_type, begin_date, end_date)
+            if actual_range:
+                self.store.replace_coverage(self.symbol, self.k_type, actual_range[0], actual_range[1], "auto")
         return refresh_counts
 
     def _refresh(self, provider_name, begin_date, end_date, retention_begin=None):
@@ -98,15 +100,25 @@ class CCache(CCommonStockApi):
         bars = list(provider.get_kl_data())
         if bars:
             written = self.store.upsert_bars(self.symbol, self.k_type, bars, provider_name)
+            actual_begin, actual_end = self._bar_date_range(bars)
             if retention_begin:
                 self.store.prune_before(self.symbol, self.k_type, retention_begin)
                 self.store.replace_coverage(
-                    self.symbol, self.k_type, retention_begin, end_date, provider_name
+                    self.symbol, self.k_type, max(retention_begin, actual_begin), actual_end, provider_name
                 )
             else:
-                self.store.mark_covered(self.symbol, self.k_type, begin_date, end_date, provider_name)
+                self.store.mark_covered(self.symbol, self.k_type, actual_begin, actual_end, provider_name)
             return {provider_name: written}
         return {}
+
+    @staticmethod
+    def _bar_date_range(bars):
+        first = min(bar.time for bar in bars)
+        last = max(bar.time for bar in bars)
+        return (
+            f"{first.year:04}-{first.month:02}-{first.day:02}",
+            f"{last.year:04}-{last.month:02}-{last.day:02}",
+        )
 
     @staticmethod
     def _merge_refresh_counts(target, source):
@@ -143,6 +155,8 @@ class CCache(CCommonStockApi):
             return "sina"
         if mode == "eod" and self.k_type == KL_TYPE.K_1M:
             return None
+        if mode == "eod" and is_etf_symbol(self.symbol) and self.k_type in {KL_TYPE.K_DAY, KL_TYPE.K_WEEK}:
+            return "eastmoney"
         return "baostock"
 
     def _is_market_open(self):
@@ -157,13 +171,16 @@ class CCache(CCommonStockApi):
     def _provider_code(self, provider_name):
         if provider_name == "sina":
             return self.symbol
+        if provider_name == "eastmoney":
+            return self.symbol[2:]
         return f"{self.symbol[:2]}.{self.symbol[2:]}"
 
     @staticmethod
     def _default_providers():
         from DataAPI.BaoStockAPI import CBaoStock
+        from DataAPI.EastMoneyAPI import CEastMoney
 
-        return {"sina": CSina, "baostock": CBaoStock}
+        return {"sina": CSina, "baostock": CBaoStock, "eastmoney": CEastMoney}
 
     def _remember_stock_name(self, provider, provider_name):
         name = getattr(provider, "name", None)
