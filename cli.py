@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 
+from contextlib import nullcontext
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
@@ -192,47 +193,50 @@ def analyze(
     config = _default_chan_config()
     analysis_results = {}
     html_drivers = []
-    if data_src == "cache":
-        for level in levels:
-            cache = CCache(code, level, begin_time[level], end_date, AUTYPE.QFQ, mode="eod")
-            cache.refresh()
-            list(cache.get_kl_data())
     output_stem = _stock_output_stem(code)
     analysis_level_sets = [[level] for level in levels] if data_src == "cache" else [levels]
-    for analysis_levels in analysis_level_sets:
-        analysis_begin_time = {level: begin_time[level] for level in analysis_levels}
-        chan = CChan(
-            code=code,
-            begin_time=analysis_begin_time,
-            end_time=end_date,
-            data_src=DATA_SOURCE_MAP[data_src],
-            lv_list=analysis_levels,
-            config=config,
-            autype=AUTYPE.QFQ,
-        )
-        for level in analysis_levels:
-            analysis_results[level] = chan[level]
+    analysis_context = CBaoStock.keep_alive() if data_src == "cache" else nullcontext()
+    with analysis_context:
+        if data_src == "cache":
+            for level in levels:
+                cache = CCache(code, level, begin_time[level], end_date, AUTYPE.QFQ, mode="eod")
+                cache.refresh()
+                list(cache.get_kl_data())
 
-        if html:
-            for html_level in analysis_levels:
-                if html_level in DEFAULT_HTML_LEVELS:
-                    html_drivers.append(CPlotlyDriver(chan, html_level))
+        for analysis_levels in analysis_level_sets:
+            analysis_begin_time = {level: begin_time[level] for level in analysis_levels}
+            chan = CChan(
+                code=code,
+                begin_time=analysis_begin_time,
+                end_time=end_date,
+                data_src=DATA_SOURCE_MAP[data_src],
+                lv_list=analysis_levels,
+                config=config,
+                autype=AUTYPE.QFQ,
+            )
+            for level in analysis_levels:
+                analysis_results[level] = chan[level]
 
-        if figure and not config.trigger_step:
-            plot_driver = CPlotDriver(
-                chan,
-                plot_config=_default_plot_config(),
-                plot_para=_default_plot_para(),
-            )
-            output_dir.mkdir(parents=True, exist_ok=True)
-            suffix = f"_{analysis_levels[0].name}" if data_src == "cache" else ""
-            plot_driver.save2img(str(output_dir / f"{output_stem}{suffix}.png"))
-        elif figure:
-            CAnimateDriver(
-                chan,
-                plot_config=_default_plot_config(),
-                plot_para=_default_plot_para(),
-            )
+            if html:
+                for html_level in analysis_levels:
+                    if html_level in DEFAULT_HTML_LEVELS:
+                        html_drivers.append(CPlotlyDriver(chan, html_level))
+
+            if figure and not config.trigger_step:
+                plot_driver = CPlotDriver(
+                    chan,
+                    plot_config=_default_plot_config(),
+                    plot_para=_default_plot_para(),
+                )
+                output_dir.mkdir(parents=True, exist_ok=True)
+                suffix = f"_{analysis_levels[0].name}" if data_src == "cache" else ""
+                plot_driver.save2img(str(output_dir / f"{output_stem}{suffix}.png"))
+            elif figure:
+                CAnimateDriver(
+                    chan,
+                    plot_config=_default_plot_config(),
+                    plot_para=_default_plot_para(),
+                )
 
     if html and html_drivers:
         output_dir.mkdir(parents=True, exist_ok=True)

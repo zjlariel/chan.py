@@ -144,6 +144,40 @@ def test_analyze_html_with_non_cache_source_uses_loaded_day_30m_5m_levels(tmp_pa
     assert [call.args[1] for call in mock_plotly.call_args_list] == [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
 
 
+def test_analyze_cache_keeps_one_baostock_session_for_refresh_and_load(tmp_path):
+    sessions = []
+
+    @contextmanager
+    def fake_keep_alive():
+        sessions.append("enter")
+        yield
+        sessions.append("exit")
+
+    class FakeCache:
+        def __init__(self, code, k_type, *args, **kwargs):
+            pass
+
+        def refresh(self):
+            return {}
+
+        def get_kl_data(self):
+            return iter(())
+
+    with (
+        patch("cli.CCache", FakeCache),
+        patch("cli.CChan") as mock_chan,
+        patch("cli.CPlotlyDriver") as mock_plotly,
+        patch("cli.CBaoStock.keep_alive", fake_keep_alive),
+    ):
+        mock_chan.return_value = MagicMock()
+        mock_plotly.return_value = MagicMock()
+
+        result = runner.invoke(app, ["analyze", "--html", "--output-dir", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert sessions == ["enter", "exit"]
+
+
 def test_stock_output_stem_prefers_cached_chinese_name_and_sanitizes_it(tmp_path):
     cache_path = tmp_path / "cache.sqlite3"
     CacheStore(cache_path).upsert_stock_name("sz000001", "\u5e73\u5b89/\u94f6\u884c", "baostock")
