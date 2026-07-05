@@ -292,6 +292,26 @@ def test_cache_update_defaults_to_auto_mode(tmp_path):
     assert all(item[2] == "auto" for item in calls)
 
 
+def test_cache_update_explicit_etf_code_uses_etf_analysis_levels(tmp_path):
+    calls = []
+
+    class FakeCache:
+        def __init__(self, code, k_type, **kwargs):
+            self.code = code
+            self.k_type = k_type
+            self.mode = kwargs["mode"]
+
+        def refresh(self):
+            calls.append((self.code, self.k_type.name, self.mode))
+            return {}
+
+    with patch("cli.CCache", FakeCache):
+        result = runner.invoke(app, ["cache", "update", "--codes", "513130", "--cache-path", str(tmp_path / "cache.sqlite3")])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("513130", k_type, "auto") for k_type in ["K_WEEK", "K_DAY", "K_30M"]]
+
+
 def test_cache_update_all_updates_active_tracked_stocks(tmp_path):
     calls = []
 
@@ -341,7 +361,34 @@ def test_cache_update_all_etfs_updates_active_tracked_etfs(tmp_path):
         result = runner.invoke(app, ["cache", "update", "--all-etfs", "--mode", "eod", "--cache-path", str(tmp_path / "cache.sqlite3")])
 
     assert result.exit_code == 0, result.output
-    assert calls == [(code, k_type) for code in ["513130", "159530"] for k_type in ["K_WEEK", "K_DAY", "K_60M", "K_30M", "K_15M", "K_5M"]]
+    assert calls == [(code, k_type) for code in ["513130", "159530"] for k_type in ["K_WEEK", "K_DAY", "K_30M"]]
+
+
+def test_cache_update_all_etfs_defaults_to_etf_analysis_levels(tmp_path):
+    calls = []
+
+    class FakeCache:
+        def __init__(self, code, k_type, **kwargs):
+            self.code = code
+            self.k_type = k_type
+            self.mode = kwargs["mode"]
+
+        def refresh(self, full=False):
+            calls.append((self.code, self.k_type.name, self.mode))
+            return {}
+
+    class FakeEtfStore:
+        def __init__(self, path):
+            self.path = path
+
+        def list_positions(self):
+            return [{"symbol": "513130"}]
+
+    with patch("cli.CCache", FakeCache), patch("cli.EtfStore", FakeEtfStore):
+        result = runner.invoke(app, ["cache", "update", "--all-etfs", "--cache-path", str(tmp_path / "cache.sqlite3")])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("513130", k_type, "auto") for k_type in ["K_WEEK", "K_DAY", "K_30M"]]
 
 
 def test_cache_update_rejects_mixing_all_etfs_with_other_sources(tmp_path):

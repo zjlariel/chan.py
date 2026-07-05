@@ -23,6 +23,7 @@ from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
 from DataAPI.BaoStockAPI import CBaoStock
 from DataAPI.CacheAPI import CCache
 from DataAPI.CacheStore import CacheStore
+from DataAPI.Symbol import is_etf_symbol
 from Plot.AnimatePlotDriver import CAnimateDriver
 from Plot.PlotDriver import CPlotDriver
 from Plot.PlotlyDriver import CPlotlyDriver
@@ -32,6 +33,7 @@ app = typer.Typer(help="缠论命令行工具")
 DEFAULT_LEVELS = [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
 DEFAULT_HTML_LEVELS = [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
 PORTFOLIO_LEVELS = [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_30M]
+ETF_CACHE_LEVELS = PORTFOLIO_LEVELS
 DEFAULT_LOOKBACK_DAYS = {
     KL_TYPE.K_WEEK: 2400,
     KL_TYPE.K_DAY: 1200,
@@ -50,6 +52,12 @@ LIVE_TYPES = [KL_TYPE.K_1M, KL_TYPE.K_5M, KL_TYPE.K_15M, KL_TYPE.K_30M, KL_TYPE.
 EOD_TYPES = [KL_TYPE.K_WEEK, KL_TYPE.K_DAY, KL_TYPE.K_60M, KL_TYPE.K_30M, KL_TYPE.K_15M, KL_TYPE.K_5M]
 AUTO_TYPES = EOD_TYPES + [KL_TYPE.K_1M]
 INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _cache_update_levels(mode, code, all_etfs=False):
+    if all_etfs or is_etf_symbol(code):
+        return ETF_CACHE_LEVELS
+    return LIVE_TYPES if mode == "live" else EOD_TYPES if mode == "eod" else AUTO_TYPES
 
 
 def _parse_levels(value: str) -> list[KL_TYPE]:
@@ -276,7 +284,6 @@ def cache_update(
     if selected_sources != 1:
         raise typer.BadParameter("必须且只能指定 --codes、--all 或 --all-etfs")
 
-    types = LIVE_TYPES if mode == "live" else EOD_TYPES if mode == "eod" else AUTO_TYPES
     if all_stocks:
         code_list = [position["symbol"] for position in PortfolioStore(cache_path).list_positions()]
     elif all_etfs:
@@ -285,6 +292,7 @@ def cache_update(
         code_list = [code.strip() for code in codes.split(",") if code.strip()]
     with CBaoStock.keep_alive():
         for code in code_list:
+            types = _cache_update_levels(mode, code, all_etfs=all_etfs)
             for k_type in types:
                 api = CCache(code, k_type, cache_path=cache_path, mode=mode)
                 if full:
