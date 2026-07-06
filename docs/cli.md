@@ -29,6 +29,9 @@ chanpy analyze [OPTIONS]
 | `--output-dir` | 图片输出目录 | `output` |
 | `--json` | 导出笔、线段、中枢与买卖点等计算结果 | 关闭 |
 | `--figure` | 生成 PNG 图片输出 | 关闭 |
+| `--refresh` | 使用 `cache` 数据源时先按 `eod` 模式刷新缓存；默认只读已有缓存 | 关闭 |
+
+使用默认 `--data-src cache` 时，`analyze` 不会自动联网补数据；如果当前缓存不覆盖请求区间，会直接报错提示先刷新。需要更新数据时显式加 `--refresh`，或先运行 `cache update`。
 
 未提供 `--start` 时，默认回溯天数如下：
 
@@ -136,7 +139,7 @@ chanpy portfolio analyze --output-dir output
 
 `portfolio delete --code <代码>` 会把股票从当前股票池中移除；这是软删除，只会将 `tracked_stocks.active` 标记为 `0`，不会物理删除历史记录、成本价、备注等信息。删除后该股票不会出现在 `portfolio list`、`portfolio analyze` 和 `cache update --all` 的启用股票范围内。后续可再次使用 `portfolio set` 重新加入。
 
-`portfolio analyze` 使用周线作为趋势背景、日线作为中长线决策级别、30 分钟作为次日买入价执行参考；不使用 5 分钟信号。分析结果默认保存为两份文件：`output/portfolio_model_YYYY-MM-DD.json` 给大模型做去标签的事实分析，`output/portfolio_summary_YYYY-MM-DD.txt` 给人快速扫盘；可用 `--output-dir` 指定输出目录。摘要按持仓/观察决策分组：持仓股优先看日线卖点风控，观察股优先看日线买点机会，30 分钟只提示次日是否适合回踩低吸、避免追高或盘中重看。模型 JSON 只保留原始事实字段，包括最近买卖点、笔、线段、中枢和日线指标交叉序列，不写入程序生成的决策标签、提示语或结论。它是规则化技术分析提示，不会自动执行交易。
+`portfolio analyze` 使用周线作为趋势背景、日线作为中长线决策级别、30 分钟作为次日买入价执行参考；不使用 5 分钟信号。默认只读取已有缓存；缓存不覆盖分析区间时会报错提示先刷新。`--refresh` 会先按 `eod` 模式刷新分析级别缓存，不请求新浪实时分钟接口。分析结果默认保存为两份文件：`output/portfolio_model_YYYY-MM-DD.json` 给大模型做去标签的事实分析，`output/portfolio_summary_YYYY-MM-DD.txt` 给人快速扫盘；可用 `--output-dir` 指定输出目录。摘要按持仓/观察决策分组：持仓股优先看日线卖点风控，观察股优先看日线买点机会，30 分钟只提示次日是否适合回踩低吸、避免追高或盘中重看。模型 JSON 只保留原始事实字段，包括最近买卖点、笔、线段、中枢和日线指标交叉序列，不写入程序生成的决策标签、提示语或结论。它是规则化技术分析提示，不会自动执行交易。
 
 使用 `portfolio analyze --code <代码>` 分析未写入跟踪表的股票时，会以“临时观察股”身份分析，不会自动保存到数据库。
 
@@ -169,7 +172,7 @@ chanpy cache update --codes 159530 --mode eod
 chanpy cache update --all-etfs --mode eod
 ```
 
-`etf analyze` 使用周线作为趋势背景、日线作为中长线决策级别、30 分钟作为次日买入价执行参考；不使用 5 分钟信号。它会读取 `tracked_etfs` 表里的全部启用 ETF，默认保存两份文件：`output/etf_model_YYYY-MM-DD.json` 给大模型做去标签的事实分析，`output/etf_summary_YYYY-MM-DD.txt` 给人快速扫盘。摘要按持仓/观察决策分组：持仓 ETF 优先看日线卖点风控，观察 ETF 优先看日线买点机会，30 分钟只提示次日是否适合回踩低吸、避免追高或盘中重看。模型 JSON 只保留原始事实字段，包括最近买卖点、笔、线段、中枢和日线指标交叉序列，不写入程序生成的决策标签、提示语或结论。`--refresh` 会先按 `auto` 模式刷新每只 ETF 的分析级别缓存；`--code <代码>` 可以只分析某一只已跟踪 ETF。
+`etf analyze` 使用周线作为趋势背景、日线作为中长线决策级别、30 分钟作为次日买入价执行参考；不使用 5 分钟信号。它会读取 `tracked_etfs` 表里的全部启用 ETF，默认只读取已有缓存，缓存不覆盖分析区间时会报错提示先刷新。默认保存两份文件：`output/etf_model_YYYY-MM-DD.json` 给大模型做去标签的事实分析，`output/etf_summary_YYYY-MM-DD.txt` 给人快速扫盘。摘要按持仓/观察决策分组：持仓 ETF 优先看日线卖点风控，观察 ETF 优先看日线买点机会，30 分钟只提示次日是否适合回踩低吸、避免追高或盘中重看。模型 JSON 只保留原始事实字段，包括最近买卖点、笔、线段、中枢和日线指标交叉序列，不写入程序生成的决策标签、提示语或结论。`--refresh` 会先按 `eod` 模式刷新每只 ETF 的分析级别缓存；`--code <代码>` 可以只分析某一只已跟踪 ETF。
 
 ```bash
 chanpy etf analyze

@@ -171,6 +171,8 @@ class CChan:
         return lv_klu_iter
 
     def GetStockAPI(self):
+        if isinstance(self.data_src, type) and issubclass(self.data_src, CCommonStockApi):
+            return self.data_src
         _dict = {}
         if self.data_src == DATA_SRC.BAO_STOCK:
             from DataAPI.BaoStockAPI import CBaoStock

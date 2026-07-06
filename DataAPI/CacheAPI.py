@@ -3,7 +3,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from Common.CEnum import AUTYPE, KL_TYPE
-from Common.ChanException import CChanException
+from Common.ChanException import CChanException, ErrCode
 from DataAPI.SinaAPI import CSina
 from DataAPI.Symbol import is_etf_symbol
 
@@ -39,7 +39,7 @@ class CCache(CCommonStockApi):
     ):
         effective_autype = autype or (AUTYPE.NONE if is_etf_symbol(code) else AUTYPE.QFQ)
         super().__init__(code, k_type, begin_date, end_date, effective_autype)
-        if mode not in {"auto", "live", "eod"}:
+        if mode not in {"auto", "live", "eod", "readonly"}:
             raise ValueError(f"unknown cache refresh mode: {mode}")
         self.symbol = CSina.normalize_symbol(code)
         self.store = CacheStore(cache_path or self.DEFAULT_PATH)
@@ -50,11 +50,18 @@ class CCache(CCommonStockApi):
     def get_kl_data(self):
         begin_date, end_date = self._requested_range()
         if not self.store.covers(self.symbol, self.k_type, begin_date, end_date):
+            if self.mode == "readonly":
+                raise CChanException(
+                    f"缓存缺失：{self.symbol} {self.k_type.name} {begin_date} 至 {end_date}，请先使用 --refresh 或 cache update 刷新数据",
+                    ErrCode.SRC_DATA_NOT_FOUND,
+                )
             self._refresh_first_available(begin_date, end_date, begin_date)
         yield from self.store.read_bars(self.symbol, self.k_type, begin_date, end_date)
 
     def refresh(self, full=False):
         begin_date, end_date = self._requested_range()
+        if self.mode == "readonly":
+            return {}
         if self.mode == "auto":
             return self._refresh_auto(begin_date, end_date, full)
         provider_names = self._provider_names()
@@ -116,13 +123,14 @@ class CCache(CCommonStockApi):
         if bars:
             written = self.store.upsert_bars(self.symbol, self.k_type, bars, provider_name)
             actual_begin, actual_end = self._bar_date_range(bars)
+            coverage_begin, coverage_end = self._coverage_range_for_refresh(
+                begin_date, end_date, actual_begin, actual_end, retention_begin
+            )
             if retention_begin:
                 self.store.prune_before(self.symbol, self.k_type, retention_begin)
-                self.store.replace_coverage(
-                    self.symbol, self.k_type, max(retention_begin, actual_begin), actual_end, provider_name
-                )
+                self.store.replace_coverage(self.symbol, self.k_type, coverage_begin, coverage_end, provider_name)
             else:
-                self.store.mark_covered(self.symbol, self.k_type, actual_begin, actual_end, provider_name)
+                self.store.mark_covered(self.symbol, self.k_type, coverage_begin, coverage_end, provider_name)
             return {provider_name: written}
         return {}
 
@@ -134,6 +142,22 @@ class CCache(CCommonStockApi):
             f"{first.year:04}-{first.month:02}-{first.day:02}",
             f"{last.year:04}-{last.month:02}-{last.day:02}",
         )
+
+    @staticmethod
+    def _coverage_range_for_refresh(begin_date, end_date, actual_begin, actual_end, retention_begin=None):
+        requested_begin = retention_begin or begin_date
+        if CCache._is_edge_only_gap(requested_begin, end_date, actual_begin, actual_end):
+            return requested_begin, end_date
+        return max(requested_begin, actual_begin), actual_end
+
+    @staticmethod
+    def _is_edge_only_gap(requested_begin, requested_end, actual_begin, actual_end):
+        tolerance = timedelta(days=CacheStore.CONFIRMED_EDGE_TOLERANCE_DAYS)
+        requested_start = datetime.fromisoformat(requested_begin[:10]).date()
+        requested_finish = datetime.fromisoformat(requested_end[:10]).date()
+        actual_start = datetime.fromisoformat(actual_begin[:10]).date()
+        actual_finish = datetime.fromisoformat(actual_end[:10]).date()
+        return actual_start <= requested_start + tolerance and actual_finish >= requested_finish - tolerance
 
     @staticmethod
     def _merge_refresh_counts(target, source):
@@ -217,3 +241,9 @@ class CCache(CCommonStockApi):
         from DataAPI.BaoStockAPI import CBaoStock
 
         CBaoStock.do_close()
+
+
+class CReadonlyCache(CCache):
+    def __init__(self, *args, **kwargs):
+        kwargs["mode"] = "readonly"
+        super().__init__(*args, **kwargs)

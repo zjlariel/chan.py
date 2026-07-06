@@ -21,7 +21,7 @@ from App.portfolio_analysis import build_model_item, format_portfolio_summary
 from App.portfolio_store import PortfolioStore
 from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
 from DataAPI.BaoStockAPI import CBaoStock
-from DataAPI.CacheAPI import CCache
+from DataAPI.CacheAPI import CCache, CReadonlyCache
 from DataAPI.CacheStore import CacheStore
 from DataAPI.Symbol import is_etf_symbol
 from Plot.AnimatePlotDriver import CAnimateDriver
@@ -189,6 +189,7 @@ def analyze(
     json_output: Annotated[bool, typer.Option("--json", help="导出格式化的缠论计算结果 JSON")] = False,
     figure: Annotated[bool, typer.Option("--figure", help="生成分析图片")] = False,
     html: Annotated[bool, typer.Option("--html", help="生成日线、30分钟线、5分钟线的 Plotly HTML 图表")] = False,
+    refresh: Annotated[bool, typer.Option("--refresh", help="先按 eod 模式刷新缓存；默认只读已有缓存")] = False,
 ):
     if data_src not in DATA_SOURCE_MAP:
         raise typer.BadParameter(f"未知数据源：{data_src}")
@@ -203,9 +204,10 @@ def analyze(
     html_drivers = []
     output_stem = _stock_output_stem(code)
     analysis_level_sets = [[level] for level in levels] if data_src == "cache" else [levels]
-    analysis_context = CBaoStock.keep_alive() if data_src == "cache" else nullcontext()
+    analysis_context = CBaoStock.keep_alive() if data_src == "cache" and refresh else nullcontext()
+    analysis_data_src = CReadonlyCache if data_src == "cache" else DATA_SOURCE_MAP[data_src]
     with analysis_context:
-        if data_src == "cache":
+        if data_src == "cache" and refresh:
             for level in levels:
                 cache = CCache(code, level, begin_time[level], end_date, AUTYPE.QFQ, mode="eod")
                 cache.refresh()
@@ -217,7 +219,7 @@ def analyze(
                 code=code,
                 begin_time=analysis_begin_time,
                 end_time=end_date,
-                data_src=DATA_SOURCE_MAP[data_src],
+                data_src=analysis_data_src,
                 lv_list=analysis_levels,
                 config=config,
                 autype=AUTYPE.QFQ,
@@ -445,7 +447,7 @@ def etf_list(
 @etf_app.command(name="analyze", help="批量分析持仓与观察 ETF")
 def etf_analyze(
     code: Annotated[Optional[str], typer.Option("--code", help="仅分析指定的已跟踪 ETF")] = None,
-    refresh: Annotated[bool, typer.Option("--refresh", help="先按 auto 模式刷新缓存")] = False,
+    refresh: Annotated[bool, typer.Option("--refresh", help="先按 eod 模式刷新分析级别缓存")] = False,
     cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
     output_dir: Annotated[Path, typer.Option("--output-dir", help="分析报告输出目录")] = Path("output"),
 ):
@@ -464,7 +466,7 @@ def etf_analyze(
 @portfolio_app.command(name="analyze", help="分析持仓卖点与观察股买点")
 def portfolio_analyze(
     code: Annotated[Optional[str], typer.Option("--code", help="仅分析指定的已跟踪股票")] = None,
-    refresh: Annotated[bool, typer.Option("--refresh", help="先按 auto 模式刷新缓存")] = False,
+    refresh: Annotated[bool, typer.Option("--refresh", help="先按 eod 模式刷新分析级别缓存")] = False,
     cache_path: Annotated[Path, typer.Option("--cache-path", help="SQLite 缓存文件路径")] = CCache.DEFAULT_PATH,
     output_dir: Annotated[Path, typer.Option("--output-dir", help="分析报告输出目录")] = Path("output"),
 ):
@@ -543,12 +545,13 @@ def _portfolio_analysis_levels(code, cache_path, refresh, autype=AUTYPE.QFQ):
     begin_time = _begin_time(PORTFOLIO_LEVELS, None, date.today())
     if refresh:
         for level in PORTFOLIO_LEVELS:
-            CCache(code, level, autype=autype, cache_path=cache_path, mode="auto").refresh()
+            CCache(code, level, begin_time[level], None, autype, cache_path=cache_path, mode="eod").refresh()
 
     levels = {}
     latest_price = None
+    readonly_cache = _readonly_cache_class(cache_path)
     for level in PORTFOLIO_LEVELS:
-        cache = CCache(code, level, begin_time[level], None, autype, cache_path=cache_path, mode="eod")
+        cache = CCache(code, level, begin_time[level], None, autype, cache_path=cache_path, mode="readonly")
         bars = list(cache.get_kl_data())
         if bars and (latest_price is None or level == KL_TYPE.K_30M):
             latest_price = bars[-1].close
@@ -556,13 +559,21 @@ def _portfolio_analysis_levels(code, cache_path, refresh, autype=AUTYPE.QFQ):
             code=code,
             begin_time={level: begin_time[level]},
             end_time=None,
-            data_src=DATA_SRC.CACHE,
+            data_src=readonly_cache,
             lv_list=[level],
             config=_default_chan_config(cal_kdj=level != KL_TYPE.K_WEEK),
             autype=autype,
         )
         levels[level.name] = build_document(code, "cache", {level: chan[level]})["levels"][level.name]
     return levels, latest_price
+
+
+def _readonly_cache_class(cache_path):
+    class CBoundReadonlyCache(CReadonlyCache):
+        def __init__(self, code, k_type, begin_date=None, end_date=None, autype=None, **kwargs):
+            super().__init__(code, k_type, begin_date, end_date, autype, cache_path=cache_path, **kwargs)
+
+    return CBoundReadonlyCache
 
 
 if __name__ == "__main__":

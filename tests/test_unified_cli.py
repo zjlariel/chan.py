@@ -8,12 +8,13 @@ from typer.testing import CliRunner
 
 from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
 from cli import DEFAULT_LEVELS, PORTFOLIO_LEVELS, _portfolio_analysis_levels, _stock_output_stem, app
+from DataAPI.CacheAPI import CCache, CReadonlyCache
 from DataAPI.CacheStore import CacheStore
 
 runner = CliRunner()
 
 
-def test_analyze_defaults_fill_missing_cache_with_baostock_and_use_default_levels():
+def test_analyze_defaults_read_existing_cache_without_refreshing():
     with patch("cli.CChan") as mock_chan, patch("cli.CCache") as mock_cache, patch("cli.CPlotDriver") as mock_plot:
         mock_chan.return_value = MagicMock()
         mock_cache.return_value.get_kl_data.return_value = iter(())
@@ -33,18 +34,11 @@ def test_analyze_defaults_fill_missing_cache_with_baostock_and_use_default_level
     for call, level in zip(mock_chan.call_args_list, expected_begin_dates):
         args = call.kwargs
         assert args["code"] == "sz.000001"
-        assert args["data_src"] == DATA_SRC.CACHE
+        assert args["data_src"] is CReadonlyCache
         assert args["lv_list"] == [level]
         assert args["begin_time"] == {level: expected_begin_dates[level]}
 
-    assert mock_cache.call_count == 4
-    assert all(call.kwargs["mode"] == "eod" for call in mock_cache.call_args_list)
-    assert [call.args[1] for call in mock_cache.call_args_list] == [
-        KL_TYPE.K_WEEK,
-        KL_TYPE.K_DAY,
-        KL_TYPE.K_30M,
-        KL_TYPE.K_5M,
-    ]
+    assert not mock_cache.called
     assert not mock_plot.called
 
 
@@ -144,7 +138,7 @@ def test_analyze_html_with_non_cache_source_uses_loaded_day_30m_5m_levels(tmp_pa
     assert [call.args[1] for call in mock_plotly.call_args_list] == [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M]
 
 
-def test_analyze_cache_keeps_one_baostock_session_for_refresh_and_load(tmp_path):
+def test_analyze_cache_default_does_not_open_baostock_session(tmp_path):
     sessions = []
 
     @contextmanager
@@ -164,7 +158,6 @@ def test_analyze_cache_keeps_one_baostock_session_for_refresh_and_load(tmp_path)
             return iter(())
 
     with (
-        patch("cli.CCache", FakeCache),
         patch("cli.CChan") as mock_chan,
         patch("cli.CPlotlyDriver") as mock_plotly,
         patch("cli.CBaoStock.keep_alive", fake_keep_alive),
@@ -175,7 +168,8 @@ def test_analyze_cache_keeps_one_baostock_session_for_refresh_and_load(tmp_path)
         result = runner.invoke(app, ["analyze", "--html", "--output-dir", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert sessions == ["enter", "exit"]
+    assert sessions == []
+    assert mock_chan.call_args.kwargs["data_src"] is CReadonlyCache
 
 
 def test_stock_output_stem_prefers_cached_chinese_name_and_sanitizes_it(tmp_path):
@@ -185,7 +179,18 @@ def test_stock_output_stem_prefers_cached_chinese_name_and_sanitizes_it(tmp_path
     assert _stock_output_stem("sz.000001", cache_path) == "\u5e73\u5b89_\u94f6\u884c"
 
 
-def test_analyze_cache_refreshes_each_level_before_loading_cached_data():
+def test_analyze_cache_default_uses_readonly_without_refreshing():
+    with patch("cli.CChan") as mock_chan:
+        mock_chan.return_value = MagicMock()
+
+        result = runner.invoke(app, ["analyze", "--kl-type", "K_DAY,K_30M"])
+
+    assert result.exit_code == 0, result.output
+    assert mock_chan.call_count == 2
+    assert all(call.kwargs["data_src"] is CReadonlyCache for call in mock_chan.call_args_list)
+
+
+def test_analyze_cache_refresh_option_refreshes_each_level_before_loading_cached_data():
     calls = []
 
     class FakeCache:
@@ -203,7 +208,7 @@ def test_analyze_cache_refreshes_each_level_before_loading_cached_data():
     with patch("cli.CCache", FakeCache), patch("cli.CChan") as mock_chan:
         mock_chan.return_value = MagicMock()
 
-        result = runner.invoke(app, ["analyze", "--kl-type", "K_DAY,K_30M"])
+        result = runner.invoke(app, ["analyze", "--refresh", "--kl-type", "K_DAY,K_30M"])
 
     assert result.exit_code == 0, result.output
     assert calls == [
@@ -906,6 +911,62 @@ def test_portfolio_analysis_calculates_each_level_independently(tmp_path):
     assert mock_chan.call_count == len(PORTFOLIO_LEVELS)
     assert [call.kwargs["lv_list"] for call in mock_chan.call_args_list] == [[level] for level in PORTFOLIO_LEVELS]
     assert KL_TYPE.K_5M not in PORTFOLIO_LEVELS
+
+
+def test_portfolio_analysis_refresh_uses_eod_mode(tmp_path):
+    calls = []
+    fake_bar = MagicMock(close=43.07)
+    document = {"levels": {level.name: {"buy_sell_points": []} for level in PORTFOLIO_LEVELS}}
+
+    class FakeCache:
+        def __init__(self, code, k_type, begin_date=None, end_date=None, autype=None, cache_path=None, mode="auto", **kwargs):
+            self.code = code
+            self.k_type = k_type
+            self.begin_date = begin_date
+            self.mode = mode
+
+        def refresh(self):
+            calls.append((self.k_type.name, self.mode, self.begin_date))
+            return {}
+
+        def get_kl_data(self):
+            calls.append((self.k_type.name, self.mode, self.begin_date))
+            return iter([fake_bar])
+
+    with patch("cli.CCache", FakeCache), patch("cli.CChan"), patch("cli.build_document", return_value=document):
+        _portfolio_analysis_levels("002536", tmp_path / "cache.sqlite3", refresh=True)
+
+    refresh_calls = [call for call in calls if call[1] == "eod"]
+    readonly_calls = [call for call in calls if call[1] == "readonly"]
+    assert [call[:2] for call in refresh_calls] == [(level.name, "eod") for level in PORTFOLIO_LEVELS]
+    assert [call[:2] for call in readonly_calls] == [(level.name, "readonly") for level in PORTFOLIO_LEVELS]
+    assert [(name, begin_date) for name, _, begin_date in refresh_calls] == [
+        (name, begin_date) for name, _, begin_date in readonly_calls
+    ]
+
+
+def test_portfolio_analysis_without_refresh_uses_readonly_mode(tmp_path):
+    calls = []
+    fake_bar = MagicMock(close=43.07)
+    document = {"levels": {level.name: {"buy_sell_points": []} for level in PORTFOLIO_LEVELS}}
+
+    class FakeCache:
+        def __init__(self, code, k_type, begin_date=None, end_date=None, autype=None, cache_path=None, mode="auto", **kwargs):
+            self.code = code
+            self.k_type = k_type
+            self.mode = mode
+            calls.append((self.k_type.name, self.mode))
+
+        def refresh(self):
+            return {}
+
+        def get_kl_data(self):
+            return iter([fake_bar])
+
+    with patch("cli.CCache", FakeCache), patch("cli.CChan"), patch("cli.build_document", return_value=document):
+        _portfolio_analysis_levels("002536", tmp_path / "cache.sqlite3", refresh=False)
+
+    assert calls == [(level.name, "readonly") for level in PORTFOLIO_LEVELS]
 
 
 def test_portfolio_analysis_skips_weekly_kdj_calculation(tmp_path):

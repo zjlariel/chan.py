@@ -3,15 +3,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from Common.CEnum import DATA_FIELD
+from Common.CEnum import DATA_FIELD, KL_TYPE
 from Common.CTime import CTime
 from DataAPI.Symbol import is_etf_symbol
 from KLine.KLine_Unit import CKLine_Unit
 
 
 class CacheStore:
-    COVERAGE_EDGE_TOLERANCE_DAYS = 14
+    COVERAGE_EDGE_TOLERANCE_DAYS = 3
+    CONFIRMED_EDGE_TOLERANCE_DAYS = 14
+    PERIOD_EDGE_TOLERANCE_DAYS = 14
     FIRST_AVAILABLE_MIN_BARS = 20
+    PERIOD_EDGE_TOLERANCE_TYPES = {KL_TYPE.K_WEEK, KL_TYPE.K_MON, KL_TYPE.K_QUARTER, KL_TYPE.K_YEAR}
 
     def __init__(self, path):
         self.path = Path(path)
@@ -191,24 +194,45 @@ class CacheStore:
         requested_end = datetime.fromisoformat(self._range_end(end_date))
         actual_start = datetime.fromisoformat(actual_range[0])
         actual_end = datetime.fromisoformat(actual_range[1])
-        tolerance = timedelta(days=self.COVERAGE_EDGE_TOLERANCE_DAYS)
+        tolerance = self._edge_tolerance(k_type)
         actual_start_date = actual_start.date().isoformat()
         for row in rows:
             coverage_start = datetime.fromisoformat(self._range_start(row["start_date"]))
             coverage_end = datetime.fromisoformat(self._range_end(row["end_date"]))
             starts_from_first_available = (
-                is_etf_symbol(symbol)
-                and actual_count >= self.FIRST_AVAILABLE_MIN_BARS
+                actual_count >= self.FIRST_AVAILABLE_MIN_BARS
                 and actual_start > requested_start + tolerance
                 and row["start_date"] == actual_start_date
             )
-            coverage_start_ok = coverage_start <= requested_start or starts_from_first_available
-            coverage_end_ok = coverage_end >= requested_end - tolerance
-            actual_start_ok = actual_start <= requested_start + tolerance or starts_from_first_available
-            actual_end_ok = actual_end >= requested_end - tolerance
+            coverage_start_ok = self._start_edge_ok(coverage_start, requested_start, tolerance) or starts_from_first_available
+            coverage_end_ok = self._end_edge_ok(coverage_end, requested_end, tolerance)
+            actual_start_tolerance = self._actual_edge_tolerance(k_type, coverage_start <= requested_start)
+            actual_end_tolerance = self._actual_edge_tolerance(k_type, coverage_end >= requested_end)
+            actual_start_ok = actual_start <= requested_start + actual_start_tolerance or starts_from_first_available
+            actual_end_ok = self._end_edge_ok(actual_end, requested_end, actual_end_tolerance)
             if coverage_start_ok and coverage_end_ok and actual_start_ok and actual_end_ok:
                 return True
         return False
+
+    @staticmethod
+    def _start_edge_ok(edge_start, requested_start, tolerance):
+        return edge_start <= requested_start + tolerance
+
+    @staticmethod
+    def _end_edge_ok(edge_end, requested_end, tolerance):
+        return edge_end.date() >= (requested_end - tolerance).date()
+
+    @classmethod
+    def _edge_tolerance(cls, k_type):
+        days = cls.PERIOD_EDGE_TOLERANCE_DAYS if k_type in cls.PERIOD_EDGE_TOLERANCE_TYPES else cls.COVERAGE_EDGE_TOLERANCE_DAYS
+        return timedelta(days=days)
+
+    @classmethod
+    def _actual_edge_tolerance(cls, k_type, coverage_confirms_edge):
+        if not coverage_confirms_edge:
+            return cls._edge_tolerance(k_type)
+        days = max(cls.CONFIRMED_EDGE_TOLERANCE_DAYS, cls.PERIOD_EDGE_TOLERANCE_DAYS if k_type in cls.PERIOD_EDGE_TOLERANCE_TYPES else cls.COVERAGE_EDGE_TOLERANCE_DAYS)
+        return timedelta(days=days)
 
     def count_bars(self, symbol, k_type, begin_date=None, end_date=None):
         clauses = ["symbol = ?", "k_type = ?"]

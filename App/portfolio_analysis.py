@@ -75,7 +75,7 @@ def build_model_item(position, levels, latest_price):
 def format_portfolio_summary(items):
     lines = ["股票池分析摘要"]
     for section in _summary_sections(items):
-        lines.extend(_summary_status_lines(section, [item for item in items if item.get("section") == section]))
+        lines.extend(_summary_status_lines(section, _summary_sorted_items([item for item in items if item.get("section") == section])))
     lines.append("")
     lines.append("持仓/观察决策分组：")
     labels = [
@@ -91,7 +91,7 @@ def format_portfolio_summary(items):
         "日线数据不足",
     ]
     for label in labels:
-        grouped = [item for item in items if item["position_decision"]["label"] == label]
+        grouped = _summary_sorted_items([item for item in items if item["position_decision"]["label"] == label])
         if not grouped:
             continue
         lines.append(f"  {label}：")
@@ -308,6 +308,38 @@ def _summary_status_lines(title, items):
     for item in items:
         lines.append(f"  - {_summary_item_text(item)}")
     return lines
+
+
+def _summary_sorted_items(items):
+    return sorted(items, key=_summary_sort_key)
+
+
+def _summary_sort_key(item):
+    buy = ((item.get("daily_decision") or {}).get("buy") or {})
+    status_order = {
+        "buy": 0,
+        "invalidated": 1,
+        "no_buy": 2,
+        "no_data": 3,
+    }
+    freshness_order = {
+        "current": 0,
+        "weak": 1,
+        "old": 2,
+        "unknown": 3,
+        None: 4,
+    }
+    age_days = buy.get("age_days")
+    if age_days is None:
+        age_days = 999999
+    point = buy.get("point") or {}
+    return (
+        status_order.get(buy.get("status"), 4),
+        freshness_order.get(buy.get("freshness"), 4),
+        age_days,
+        point.get("time") or "",
+        item.get("symbol") or "",
+    )
 
 
 def _summary_sections(items):

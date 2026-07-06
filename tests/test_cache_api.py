@@ -3,6 +3,7 @@ from pathlib import Path
 
 from Chan import CChan
 from Common.CEnum import AUTYPE, DATA_FIELD, DATA_SRC, KL_TYPE
+from Common.ChanException import CChanException
 from Common.CTime import CTime
 from DataAPI.CacheAPI import CCache
 from DataAPI.CacheStore import CacheStore
@@ -65,6 +66,14 @@ class PartialBao(FakeSina):
         yield make_bar(1.1, CTime(2026, 7, 1, 0, 0, auto=False))
 
 
+class HolidayEdgeBao(FakeSina):
+    calls = []
+
+    def get_kl_data(self):
+        yield make_bar(1.0, CTime(2026, 10, 9, 0, 0, auto=False))
+        yield make_bar(1.1, CTime(2026, 10, 16, 0, 0, auto=False))
+
+
 class RangeBao(FakeSina):
     calls = []
 
@@ -124,6 +133,31 @@ def test_end_of_day_cache_miss_fetches_baostock(tmp_path):
 
     assert FakeBao.calls[0][:4] == ("sh.600000", KL_TYPE.K_5M, "2026-06-18", "2026-06-18")
     assert FakeSina.calls == []
+
+
+def test_readonly_cache_miss_reports_missing_cache_without_fetching(tmp_path):
+    FakeSina.calls = []
+    FakeBao.calls = []
+    api = CCache(
+        "600000",
+        KL_TYPE.K_DAY,
+        "2026-06-18",
+        "2026-06-18",
+        AUTYPE.QFQ,
+        cache_path=tmp_path / "cache.sqlite3",
+        now=datetime(2026, 6, 18, 19, 0),
+        provider_classes={"sina": FakeSina, "baostock": FakeBao},
+        mode="readonly",
+    )
+
+    try:
+        list(api.get_kl_data())
+    except CChanException as exc:
+        assert "缓存缺失" in str(exc)
+    else:
+        raise AssertionError("readonly cache miss should fail")
+    assert FakeSina.calls == []
+    assert FakeBao.calls == []
 
 
 def test_cache_accepts_bare_etf_symbols_and_fetches_daily_from_yahoo(tmp_path):
@@ -314,6 +348,25 @@ def test_auto_refresh_does_not_overstate_coverage_when_provider_returns_partial_
     assert api.store.covers(api.symbol, KL_TYPE.K_DAY, "2026-01-05", "2026-07-01")
 
 
+def test_refresh_marks_requested_coverage_when_missing_bars_are_only_holiday_edges(tmp_path):
+    HolidayEdgeBao.calls = []
+    api = CCache(
+        "000333",
+        KL_TYPE.K_DAY,
+        "2026-10-01",
+        "2026-10-18",
+        AUTYPE.QFQ,
+        cache_path=tmp_path / "cache.sqlite3",
+        now=datetime(2026, 10, 18, 19, 0),
+        provider_classes={"sina": FakeSina, "baostock": HolidayEdgeBao},
+        mode="eod",
+    )
+
+    api.refresh()
+
+    assert api.store.covers(api.symbol, KL_TYPE.K_DAY, "2026-10-01", "2026-10-18")
+
+
 def test_subsequent_refresh_uses_a_short_overlap_instead_of_full_window(tmp_path):
     FakeSina.calls = []
     RangeBao.calls = []
@@ -372,3 +425,13 @@ def test_cchan_registers_cache_data_source():
     chan.data_src = DATA_SRC.CACHE
 
     assert chan.GetStockAPI() is CCache
+
+
+def test_cchan_accepts_custom_cache_api_class():
+    class CustomCache(CCache):
+        pass
+
+    chan = CChan.__new__(CChan)
+    chan.data_src = CustomCache
+
+    assert chan.GetStockAPI() is CustomCache

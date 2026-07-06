@@ -1,4 +1,4 @@
-from App.portfolio_analysis import build_model_item, build_observation
+from App.portfolio_analysis import build_model_item, build_observation, format_portfolio_summary
 
 
 def test_build_observation_outputs_objective_level_facts():
@@ -170,6 +170,43 @@ def test_model_item_uses_daily_decision_and_m30_execution_reference():
     assert item["daily_decision"]["label"] == "日线买点当前有效"
     assert item["m30_execution"]["hint"] == "30分钟买点过夜，仅作参考，次日需重看"
     assert "linkage" not in item
+
+
+def test_summary_sorts_items_by_daily_buy_freshness():
+    older = build_model_item(
+        {"symbol": "000001", "name": "较旧买点", "quantity": 0, "cost_price": None, "status": "watching"},
+        {
+            "K_DAY": {
+                "data_range": {"start": "2026/04/01", "end": "2026/07/03"},
+                "buy_sell_points": [{"time": "2026/06/29", "is_buy": True, "type": "1"}],
+            },
+            "K_30M": {
+                "data_range": {"start": "2026/06/20 09:30", "end": "2026/07/03 15:00"},
+                "buy_sell_points": [{"time": "2026/07/03 10:00", "is_buy": True, "type": "1"}],
+            },
+        },
+        latest_price=10.0,
+    )
+    fresher = build_model_item(
+        {"symbol": "000002", "name": "最新买点", "quantity": 0, "cost_price": None, "status": "watching"},
+        {
+            "K_DAY": {
+                "data_range": {"start": "2026/04/01", "end": "2026/07/03"},
+                "buy_sell_points": [{"time": "2026/07/03", "is_buy": True, "type": "2"}],
+            },
+            "K_30M": {
+                "data_range": {"start": "2026/06/20 09:30", "end": "2026/07/03 15:00"},
+                "buy_sell_points": [{"time": "2026/07/03 10:00", "is_buy": True, "type": "1"}],
+            },
+        },
+        latest_price=20.0,
+    )
+    older["section"] = "观察股"
+    fresher["section"] = "观察股"
+
+    summary = format_portfolio_summary([older, fresher])
+
+    assert summary.index("最新买点(000002)") < summary.index("较旧买点(000001)")
 
 
 def test_model_item_exposes_daily_sell_risk_for_holdings():

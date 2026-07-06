@@ -48,7 +48,7 @@ def test_records_coverage_ranges(tmp_path: Path):
     store.mark_covered("sh600000", KL_TYPE.K_DAY, "2026-06-01", "2026-06-18", "baostock")
 
     assert store.covers("sh600000", KL_TYPE.K_DAY, "2026-06-01", "2026-06-18")
-    assert not store.covers("sh600000", KL_TYPE.K_DAY, "2026-05-31", "2026-06-18")
+    assert not store.covers("sh600000", KL_TYPE.K_DAY, "2026-05-28", "2026-06-18")
 
 
 def test_coverage_requires_actual_bars_to_span_requested_range(tmp_path: Path):
@@ -78,6 +78,69 @@ def test_coverage_accepts_first_available_bar_after_requested_start(tmp_path: Pa
     store.mark_covered("sz159530", KL_TYPE.K_DAY, "2024-01-10", "2026-07-02", "yahoo")
 
     assert store.covers("sz159530", KL_TYPE.K_DAY, "2023-03-20", "2026-07-02")
+
+
+def test_weekly_coverage_accepts_period_bar_after_natural_requested_start(tmp_path: Path):
+    store = CacheStore(tmp_path / "cache.sqlite3")
+    store.upsert_bars(
+        "sz002050",
+        KL_TYPE.K_WEEK,
+        [
+            make_bar(13, 0, 0, 12.3, year=2019, month=12),
+            make_bar(3, 0, 0, 18.8, year=2026, month=7),
+        ],
+        "baostock",
+    )
+    store.mark_covered("sz002050", KL_TYPE.K_WEEK, "2019-12-13", "2026-07-03", "baostock")
+
+    assert store.covers("sz002050", KL_TYPE.K_WEEK, "2019-12-09", "2026-07-05")
+
+
+def test_daily_coverage_accepts_first_trading_day_after_weekend_requested_start(tmp_path: Path):
+    store = CacheStore(tmp_path / "cache.sqlite3")
+    store.upsert_bars(
+        "sz000333",
+        KL_TYPE.K_DAY,
+        [
+            make_bar(22, 0, 0, 52.1, year=2026, month=6),
+            make_bar(3, 0, 0, 55.8, year=2026, month=7),
+        ],
+        "baostock",
+    )
+    store.mark_covered("sz000333", KL_TYPE.K_DAY, "2026-06-22", "2026-07-03", "baostock")
+
+    assert store.covers("sz000333", KL_TYPE.K_DAY, "2026-06-21", "2026-07-05")
+
+
+def test_daily_coverage_accepts_last_trading_day_before_weekend_requested_end(tmp_path: Path):
+    store = CacheStore(tmp_path / "cache.sqlite3")
+    store.upsert_bars(
+        "sz002050",
+        KL_TYPE.K_DAY,
+        [
+            make_bar(24, 0, 0, 21.3, year=2023, month=3),
+            make_bar(3, 0, 0, 28.8, year=2026, month=7),
+        ],
+        "baostock",
+    )
+    store.mark_covered("sz002050", KL_TYPE.K_DAY, "2023-03-23", "2026-07-03", "baostock")
+
+    assert store.covers("sz002050", KL_TYPE.K_DAY, "2023-03-24", "2026-07-06")
+
+
+def test_coverage_accepts_first_available_bar_for_newly_listed_stock(tmp_path: Path):
+    store = CacheStore(tmp_path / "cache.sqlite3")
+    store.upsert_bars(
+        "sh600941",
+        KL_TYPE.K_WEEK,
+        [make_bar(day, 0, 0, 58.0, year=2022, month=1) for day in range(7, 32)]
+        + [make_bar(day, 0, 0, 70.0, year=2022, month=2) for day in range(1, 5)]
+        + [make_bar(3, 0, 0, 85.0, year=2026, month=7)],
+        "baostock",
+    )
+    store.mark_covered("sh600941", KL_TYPE.K_WEEK, "2022-01-07", "2026-07-03", "baostock")
+
+    assert store.covers("sh600941", KL_TYPE.K_WEEK, "2019-12-10", "2026-07-06")
 
 
 def test_prunes_old_bars_and_reports_latest_timestamp(tmp_path: Path):
